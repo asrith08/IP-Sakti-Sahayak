@@ -1,0 +1,220 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-forest-950: #060e0b;
+    --color-forest-900: #0b1813;
+    --color-forest-850: #0f221b;
+    --color-forest-800: #142e25;
+    --color-forest-700: #1c3e32;
+    --color-gold-400: #dfbe7b;
+    --color-gold-500: #c8a45d;
+    --color-gold-600: #a7843e;
+    --color-ivory-50: #fbf9f4;
+    --color-ivory-100: #f5f1e7;
+    --color-ivory-200: #eae3d2;
+    --color-ivory-300: #d6ccb6;
+    --color-charcoal-900: #111715;
+    --color-charcoal-800: #18221e;
+    --color-teal-accent: #14b8a6;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #08130f;
+    color: #f5f1e7;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-serif-heading {
+    font-family: 'Playfair Display', Georgia, serif;
+    letter-spacing: -0.015em;
+  }
+
+  .font-brand {
+    font-family: 'Cinzel', serif;
+    letter-spacing: 0.08em;
+  }
+}
+
+/* Custom aesthetic utility classes */
+.gold-gradient-border {
+  border: 1px solid rgba(200, 164, 93, 0.28);
+  box-shadow: 0 0 20px -5px rgba(200, 164, 93, 0.08);
+}
+
+.gold-gradient-border:hover {
+  border-color: rgba(200, 164, 93, 0.45);
+  box-shadow: 0 0 25px -4px rgba(200, 164, 93, 0.14);
+}
+
+.emerald-glass {
+  background: rgba(15, 34, 27, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(200, 164, 93, 0.18);
+}
+
+.emerald-card {
+  background: linear-gradient(180deg, rgba(17, 39, 31, 0.85) 0%, rgba(11, 24, 19, 0.95) 100%);
+  border: 1px solid rgba(200, 164, 93, 0.16);
+}
+
+.emerald-card-interactive {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.emerald-card-interactive:hover {
+  border-color: rgba(200, 164, 93, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px -10px rgba(6, 14, 11, 0.8), 0 0 20px -5px rgba(20, 184, 166, 0.1);
+}
+
+/* ==========================================================================
+   Natural Wind & Breeze Animations (Ayurvedic Leaf & Air Element / Vata Prana)
+   Cinematic, subtle micro-drift, organic phase offsets.
+   Zero particles, pure typographic elegance.
+   ========================================================================== */
+
+@keyframes leafLineEntrance {
+  0% {
+    opacity: 0;
+    transform: translate3d(-18px, 14px, 0) rotate(-1.2deg);
+    filter: blur(3px);
+  }
+  65% {
+    opacity: 0.92;
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    filter: blur(0px);
+  }
+}
+
+@keyframes breezeDrift1 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  28% {
+    transform: translate3d(1.8px, -1.6px, 0) rotate(0.35deg);
+  }
+  62% {
+    transform: translate3d(-1.4px, 1.2px, 0) rotate(-0.25deg);
+  }
+  84% {
+    transform: translate3d(0.9px, -0.6px, 0) rotate(0.15deg);
+  }
+}
+
+@keyframes breezeDrift2 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(-2px, -1.8px, 0) rotate(-0.38deg);
+  }
+  67% {
+    transform: translate3d(1.7px, 1.3px, 0) rotate(0.32deg);
+  }
+  88% {
+    transform: translate3d(-0.7px, -0.7px, 0) rotate(-0.12deg);
+  }
+}
+
+@keyframes breezeDrift3 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  24% {
+    transform: translate3d(1.5px, 1.4px, 0) rotate(0.24deg);
+  }
+  58% {
+    transform: translate3d(-1.6px, -1.1px, 0) rotate(-0.35deg);
+  }
+  82% {
+    transform: translate3d(1px, -0.5px, 0) rotate(0.16deg);
+  }
+}
+
+@keyframes softBreezeFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-text-line-1 {
+  display: inline-block;
+  will-change: transform, opacity;
+  animation: leafLineEntrance 0.95s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both,
+             breezeDrift1 8.8s ease-in-out 1.2s infinite;
+}
+
+.hero-text-line-2 {
+  display: inline-block;
+  will-change: transform, opacity;
+  animation: leafLineEntrance 0.95s cubic-bezier(0.16, 1, 0.3, 1) 0.32s both,
+             breezeDrift2 9.6s ease-in-out 1.4s infinite;
+}
+
+.hero-text-line-3 {
+  display: inline-block;
+  will-change: transform, opacity;
+  animation: leafLineEntrance 0.95s cubic-bezier(0.16, 1, 0.3, 1) 0.48s both,
+             breezeDrift3 7.8s ease-in-out 1.6s infinite;
+}
+
+.hero-fade-delayed-1 {
+  animation: softBreezeFadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.1s both;
+}
+
+.hero-fade-delayed-2 {
+  animation: softBreezeFadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.62s both;
+}
+
+.hero-fade-delayed-3 {
+  animation: softBreezeFadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.78s both;
+}
+
+.hero-fade-delayed-4 {
+  animation: softBreezeFadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.92s both;
+}
+
+/* Accessibility: Strict respect for prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .hero-text-line-1,
+  .hero-text-line-2,
+  .hero-text-line-3,
+  .hero-fade-delayed-1,
+  .hero-fade-delayed-2,
+  .hero-fade-delayed-3,
+  .hero-fade-delayed-4 {
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #08130f;
+}
+::-webkit-scrollbar-thumb {
+  background: #1c3e32;
+  border-radius: 4px;
+  border: 2px solid #08130f;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c8a45d;
+}
