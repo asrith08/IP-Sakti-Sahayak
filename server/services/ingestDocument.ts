@@ -42,7 +42,7 @@ const pdfParse = require('pdf-parse') as (
 ) => Promise<{ numpages: number; text: string; info: Record<string, unknown> | null }>;
 
 // ── Local imports ─────────────────────────────────────────────────────────────
-import { embedText } from './embeddings.js';
+import { embedText } from './embeddings_quota';
 import { getSupabaseAdmin } from './supabaseAdmin.js';
 import { chunkPages, PageText } from './chunking.js';
 
