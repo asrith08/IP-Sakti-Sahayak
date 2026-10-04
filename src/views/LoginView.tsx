@@ -39,6 +39,12 @@ export const LoginView: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Re-entrancy guard: if a submission is already in flight, ignore this event.
+    // This is the primary protection against double-submission from any source
+    // (double-click, form re-render, StrictMode, browser autofill submit, etc.).
+    if (submitting) return;
+
     setLocalError(null);
     clearError();
 
@@ -48,8 +54,12 @@ export const LoginView: React.FC = () => {
         return;
       }
       setSubmitting(true);
-      await signIn(email, password);
-      setSubmitting(false);
+      try {
+        await signIn(email, password);
+      } finally {
+        // Always reset — even if signIn throws an unhandled exception.
+        setSubmitting(false);
+      }
       // Navigation handled by the useEffect above when user is set
 
     } else if (mode === 'signup') {
@@ -66,16 +76,19 @@ export const LoginView: React.FC = () => {
         return;
       }
       setSubmitting(true);
-      const result = await signUp(email, password);
-      setSubmitting(false);
-      // Use result.error directly — authError state is async and may not have
-      // updated yet on this render cycle, which caused stale-state false positives.
-      if (!result.error) {
-        if (result.needsEmailVerification) {
-          setMode('verify-sent');
+      try {
+        const result = await signUp(email, password);
+        // Use result.error directly — authError state is async and may not have
+        // updated yet on this render cycle, which caused stale-state false positives.
+        if (!result.error) {
+          if (result.needsEmailVerification) {
+            setMode('verify-sent');
+          }
+          // If needsEmailVerification is false, user is auto-confirmed and the
+          // onAuthStateChange listener will set user, triggering the redirect effect.
         }
-        // If needsEmailVerification is false, user is auto-confirmed and the
-        // onAuthStateChange listener will set user, triggering the redirect effect.
+      } finally {
+        setSubmitting(false);
       }
 
     } else if (mode === 'reset') {
@@ -84,11 +97,14 @@ export const LoginView: React.FC = () => {
         return;
       }
       setSubmitting(true);
-      const resetResult = await resetPassword(email);
-      setSubmitting(false);
-      // Use result.error directly — same pattern as signUp to avoid stale state.
-      if (!resetResult.error) {
-        setMode('reset-sent');
+      try {
+        const resetResult = await resetPassword(email);
+        // Use result.error directly — same pattern as signUp to avoid stale state.
+        if (!resetResult.error) {
+          setMode('reset-sent');
+        }
+      } finally {
+        setSubmitting(false);
       }
     }
   };
