@@ -68,6 +68,7 @@ export interface AuthContextType {
   error: string | null;
   signUp: (email: string, password: string) => Promise<SignUpResult>;
   signIn: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
   clearError: () => void;
@@ -148,6 +149,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return { needsEmailVerification, error: null };
   }, []);
 
+  const signInWithGoogle = useCallback(async (): Promise<void> => {
+    setError(null);
+    // Initiates the Google OAuth redirect. Supabase handles the OAuth dance;
+    // on success it redirects back to redirectTo, where onAuthStateChange picks
+    // up the session automatically. No tokens are logged or stored manually.
+    const redirectTo = `${window.location.origin}/login`;
+    const { error: err } = await supabaseBrowser.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
+    if (err) {
+      setError(humanizeAuthError(err.message ?? 'Google sign-in failed'));
+    }
+    // On success the browser is redirected — no further action needed here.
+  }, []);
+
   const signIn = useCallback(async (email: string, password: string): Promise<void> => {
     setError(null);
     const { data, error: err } = await supabaseBrowser.auth.signInWithPassword({ email, password });
@@ -188,7 +205,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   return (
     <AuthContext.Provider
-      value={{ user, session, loading, error, signUp, signIn, signOut, resetPassword, clearError }}
+      value={{ user, session, loading, error, signUp, signIn, signInWithGoogle, signOut, resetPassword, clearError }}
     >
       {children}
     </AuthContext.Provider>
