@@ -19,3 +19,4 @@ if (!supabaseUrl || !supabaseAnonKey) {
  * in a separate privileged client and never expose it to the browser.
  */
 export const supabaseServer: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+

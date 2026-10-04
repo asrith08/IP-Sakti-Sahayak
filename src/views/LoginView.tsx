@@ -68,7 +68,9 @@ export const LoginView: React.FC = () => {
       setSubmitting(true);
       const result = await signUp(email, password);
       setSubmitting(false);
-      if (!authError) {
+      // Use result.error directly — authError state is async and may not have
+      // updated yet on this render cycle, which caused stale-state false positives.
+      if (!result.error) {
         if (result.needsEmailVerification) {
           setMode('verify-sent');
         }
@@ -82,9 +84,10 @@ export const LoginView: React.FC = () => {
         return;
       }
       setSubmitting(true);
-      await resetPassword(email);
+      const resetResult = await resetPassword(email);
       setSubmitting(false);
-      if (!authError) {
+      // Use result.error directly — same pattern as signUp to avoid stale state.
+      if (!resetResult.error) {
         setMode('reset-sent');
       }
     }
