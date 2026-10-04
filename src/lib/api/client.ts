@@ -5,9 +5,52 @@ import {
   AnalysisMachineState
 } from '../../types/api';
 import { buildDynamicResponse, SAMPLE_RESPONSES } from './mockData';
+import { supabaseBrowser } from '../supabase/browser';
+
 
 const STORAGE_PREFIX = 'ipsakti_analysis_';
 const CHECKLIST_STORAGE_PREFIX = 'ipsakti_chk_';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+
+async function getAccessToken(): Promise<string | null> {
+  const { data, error } = await supabaseBrowser.auth.getSession();
+  if (error) return null;
+  return data.session?.access_token ?? null;
+}
+
+export async function apiRequest<T>(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error('Authentication required: missing access token');
+  }
+  const url = `${BASE_URL}${path}`;
+  const headers: Record<string, string> = { 'Accept': 'application/json' };
+  if (method === 'POST') {
+    headers['Content-Type'] = 'application/json';
+  }
+  headers['Authorization'] = `Bearer ${token}`;
+  const options: RequestInit = {
+    method,
+    headers,
+    body: method === 'POST' ? JSON.stringify(body) : undefined,
+  };
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    throw new Error(`Request failed ${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export interface CurrentUserResponse {
+  authenticated: boolean;
+  userId: string;
+}
+
+export async function getCurrentUser(): Promise<CurrentUserResponse> {
+  return apiRequest<CurrentUserResponse>('GET', '/api/v1/auth/me');
+}
+
+
 
 /**
  * Storage helper for client persistence of requests and responses
@@ -150,28 +193,12 @@ export async function submitAnalysisRequest(
 
   // Attempt real API call if backend is available
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-    const apiRes = await fetch('/api/v1/analyze', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(request),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    if (apiRes.ok) {
-      const data = await apiRes.json() as AnalyzeResponse;
-      saveResultToStorage(data);
-      if (onStateChange) {
-        onStateChange('completed', 'decide', 'Analysis completed successfully.');
-      }
-      return data;
+    const data = await apiRequest<AnalyzeResponse>('POST', '/api/v1/analyze', request);
+    saveResultToStorage(data);
+    if (onStateChange) {
+      onStateChange('completed', 'decide', 'Analysis completed successfully.');
     }
+    return data;
   } catch {
     // Network or backend unavailable — smoothly use contract-compliant response builder
   }

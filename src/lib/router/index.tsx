@@ -40,6 +40,10 @@ export function parseRouteParams(pathname: string): { matchedRoute: string; para
     };
   }
 
+  if (pathname === '/login') { return { matchedRoute: '/login', params: {} } }
+  if (pathname === '/profile' || pathname.startsWith('/profile/')) {
+    return { matchedRoute: '/profile', params: {} };
+  }
   if (pathname === '/ask/analyze' || pathname.startsWith('/ask/analyze/')) {
     return { matchedRoute: '/ask/analyze', params: {} };
   }

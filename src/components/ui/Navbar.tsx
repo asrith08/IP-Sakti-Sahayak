@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { Link, useRouter } from '../../lib/router';
-import { Sparkles, ShieldCheck, ArrowRight, Menu, X, PlayCircle } from 'lucide-react';
+import { Sparkles, ShieldCheck, ArrowRight, Menu, X, PlayCircle, LogOut, UserCircle2 } from 'lucide-react';
+import { useAuth } from '../../lib/auth';
 
 export const Navbar: React.FC = () => {
   const { pathname, navigate } = useRouter();
+  const { user, signOut } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showDemoModal, setShowDemoModal] = useState(false);
 
@@ -19,6 +21,12 @@ export const Navbar: React.FC = () => {
       const el = document.getElementById(id);
       if (el) el.scrollIntoView({ behavior: 'smooth' });
     }
+  };
+
+  const handleSignOut = async () => {
+    setMobileMenuOpen(false);
+    await signOut();
+    navigate('/');
   };
 
   return (
@@ -46,7 +54,7 @@ export const Navbar: React.FC = () => {
             </div>
           </div>
 
-          {/* Center: Distributed Navigation across available width */}
+          {/* Center: Navigation */}
           <nav className="hidden md:flex items-center justify-center space-x-8 lg:space-x-10 text-sm font-medium text-[#d6ccb6]">
             <button
               onClick={() => scrollToSection('product')}
@@ -76,13 +84,38 @@ export const Navbar: React.FC = () => {
 
           {/* Right: Actions */}
           <div className="hidden md:flex items-center space-x-4 shrink-0">
-            <button
-              onClick={() => setShowDemoModal(true)}
-              className="inline-flex items-center space-x-2 text-sm text-[#eae3d2] hover:text-[#dfbe7b] px-3 py-2 rounded-md transition-colors cursor-pointer"
-            >
-              <PlayCircle className="w-4 h-4 text-[#c8a45d]" />
-              <span>Watch Demo</span>
-            </button>
+            {user ? (
+              /* Authenticated: profile link + sign-out */
+              <>
+                <Link
+                  href="/profile"
+                  className="inline-flex items-center space-x-2 text-sm text-[#eae3d2] hover:text-[#dfbe7b] px-3 py-2 rounded-md transition-colors"
+                  title="View your profile"
+                >
+                  <UserCircle2 className="w-4 h-4 text-[#c8a45d] shrink-0" />
+                  <span className="max-w-[120px] truncate">
+                    {user.email?.split('@')[0] ?? 'Profile'}
+                  </span>
+                </Link>
+                <button
+                  onClick={handleSignOut}
+                  className="inline-flex items-center space-x-2 text-sm text-[#eae3d2] hover:text-[#dfbe7b] px-3 py-2 rounded-md transition-colors cursor-pointer"
+                  title={`Signed in as ${user.email}`}
+                >
+                  <LogOut className="w-4 h-4 text-[#c8a45d]" />
+                  <span>Sign Out</span>
+                </button>
+              </>
+            ) : (
+              /* Unauthenticated: watch demo */
+              <button
+                onClick={() => setShowDemoModal(true)}
+                className="inline-flex items-center space-x-2 text-sm text-[#eae3d2] hover:text-[#dfbe7b] px-3 py-2 rounded-md transition-colors cursor-pointer"
+              >
+                <PlayCircle className="w-4 h-4 text-[#c8a45d]" />
+                <span>Watch Demo</span>
+              </button>
+            )}
 
             <Link
               href="/ask"
@@ -140,16 +173,36 @@ export const Navbar: React.FC = () => {
               Trust & Sources
             </button>
             <div className="pt-4 border-t border-[#1c3e32] flex flex-col space-y-3">
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  setShowDemoModal(true);
-                }}
-                className="flex items-center space-x-2 text-sm text-[#dfbe7b] py-2"
-              >
-                <PlayCircle className="w-5 h-5 text-[#c8a45d]" />
-                <span>Watch Product Tour Demo</span>
-              </button>
+              {user ? (
+                <>
+                  <Link
+                    href="/profile"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex items-center space-x-2 text-sm text-[#dfbe7b] py-2"
+                  >
+                    <UserCircle2 className="w-5 h-5 text-[#c8a45d]" />
+                    <span>{user.email?.split('@')[0] ?? 'Profile'}</span>
+                  </Link>
+                  <button
+                    onClick={handleSignOut}
+                    className="flex items-center space-x-2 text-sm text-[#dfbe7b] py-2"
+                  >
+                    <LogOut className="w-5 h-5 text-[#c8a45d]" />
+                    <span>Sign Out</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setShowDemoModal(true);
+                  }}
+                  className="flex items-center space-x-2 text-sm text-[#dfbe7b] py-2"
+                >
+                  <PlayCircle className="w-5 h-5 text-[#c8a45d]" />
+                  <span>Watch Product Tour Demo</span>
+                </button>
+              )}
               <Link
                 href="/ask"
                 onClick={() => setMobileMenuOpen(false)}
