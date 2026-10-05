@@ -241,17 +241,24 @@ export async function ingestDrugsRules1945(opts: {
       console.log(`[ingest] Document already fully ingested (id=${doc.id}, status=indexed). Nothing to do.`);
       return;
     }
-    // Partial ingestion — resume from where we left off
-    console.log(`[ingest] Found partial ingestion (id=${doc.id}, status=${doc.status}). Checking existing chunks...`);
-    const { count: existingChunkCount } = await supabase
-      .from('document_chunks')
-      .select('id', { count: 'exact', head: true })
-      .eq('document_id', doc.id);
-    resumeFromChunk = existingChunkCount ?? 0;
     documentId = doc.id as string;
-    console.log(`[ingest] Resuming from chunk index ${resumeFromChunk} (${existingChunkCount} already inserted).`);
+    console.log(`[ingest] Existing partial document found (id=${documentId}). Checking existing chunk indices...`);
+    const { data: existingChunkIndices, error: idxErr } = await supabase
+      .from('document_chunks')
+      .select('chunk_index')
+      .eq('document_id', doc.id)
+      .limit(5000);
+
+    if (idxErr) {
+      throw new Error(`Failed to query existing chunk indices: ${idxErr.message}`);
+    }
+
+    const existingIndexSet = new Set((existingChunkIndices ?? []).map((r: any) => r.chunk_index));
+    console.log(`[ingest] Found ${existingIndexSet.size} already-indexed chunk(s).`);
+    resumeFromChunk = existingIndexSet.size;
+  } else {
+    console.log('[ingest] No existing document found — creating new document record.');
   }
-  console.log('[ingest] No duplicate found — proceeding with ingestion.');
 
   // ── Step 6: Find-or-create source record ─────────────────────────────────────
   // The sources table has no UNIQUE constraint on name (only a plain index),
@@ -340,17 +347,25 @@ export async function ingestDrugsRules1945(opts: {
         break;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+        const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
         if (is429 && attempt < EMBED_MAX_RETRIES) {
           const backoff = 5000 * attempt; // 5s, 10s, 15s, 20s
           console.log(`[ingest]   Rate-limited on chunk #${chunk.chunk_index}, retrying in ${(backoff / 1000).toFixed(0)}s (attempt ${attempt}/${EMBED_MAX_RETRIES})...`);
           await sleep(backoff);
+        } else if (is429) {
+          console.warn(`[ingest] Gemini embedding quota exhausted at chunk #${chunk.chunk_index}. Flushing pending batch and pausing.`);
+          await flush();
+          console.log(`[ingest] Preserved ${insertedCount} chunks safely in DB. Ingestion will resume from chunk #${chunk.chunk_index} when quota resets.`);
+          return;
         } else {
           throw new Error(`Embedding failed on chunk #${chunk.chunk_index} after ${attempt} attempt(s): ${msg}`);
         }
       }
     }
-    if (!embedding) throw new Error(`Embedding null after retries on chunk #${chunk.chunk_index}`);
+    if (!embedding) {
+      console.warn(`[ingest] Skipping chunk #${chunk.chunk_index} due to unfulfilled embedding.`);
+      continue;
+    }
 
     // Hard assertion — never insert wrong-dimension data
     if (embedding.length !== 768) {

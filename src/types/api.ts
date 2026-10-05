@@ -83,6 +83,12 @@ export interface EvidenceItem {
 
 export interface CitationItem {
   id: string;
+  chunkId?: string;
+  documentId?: string;
+  sourceId?: string;
+  chunk_id?: string;
+  document_id?: string;
+  source_id?: string;
   authority_name: string;
   jurisdiction: string;
   document_title: string;
@@ -116,6 +122,15 @@ export interface NextStepItem {
   guidance_note?: string;
 }
 
+export type DecisionState =
+  | 'SUPPORTED'
+  | 'PARTIALLY_SUPPORTED'
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'CONFLICTING_SOURCES'
+  | 'HUMAN_REVIEW_REQUIRED';
+
+export type ReliabilityLevel = 'high' | 'moderate' | 'preliminary' | 'insufficient';
+
 export interface AnalyzeResponse {
   request_id: string;
   status: 'completed' | 'in_progress' | 'failed';
@@ -129,6 +144,9 @@ export interface AnalyzeResponse {
   checklist: ChecklistItem[];
   warnings: string[];
   next_steps: NextStepItem[];
+  decision_state?: DecisionState;
+  confidence_score?: number;
+  reliability_level?: ReliabilityLevel;
   error?: string;
 }
 

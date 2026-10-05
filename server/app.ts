@@ -1,4 +1,4 @@
-﻿import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import healthRouter from "./routes/health";
 import authRouter from "./routes/auth";
@@ -9,8 +9,10 @@ const app = express();
 app.use(express.json());
 
 const allowedOrigins = [
-  'http://localhost:3001',
+  'http://localhost:5173',
   'http://localhost:3000',
+  'http://localhost:3001',
+  'https://ip-sakti-sahayak-puce.vercel.app',
   ...(process.env.APP_URL ? [process.env.APP_URL] : []),
 ];
 

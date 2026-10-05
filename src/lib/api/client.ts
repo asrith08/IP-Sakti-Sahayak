@@ -7,13 +7,14 @@ import {
 import { buildDynamicResponse, SAMPLE_RESPONSES } from './mockData';
 import { supabaseBrowser } from '../supabase/browser';
 
-
 const STORAGE_PREFIX = 'ipsakti_analysis_';
 const CHECKLIST_STORAGE_PREFIX = 'ipsakti_chk_';
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 
 async function getAccessToken(): Promise<string | null> {
   const { data, error } = await supabaseBrowser.auth.getSession();
+  const hasToken = !!data.session?.access_token;
+  console.debug('[IP-SAKTI] getAccessToken: has token?', hasToken);
   if (error) return null;
   return data.session?.access_token ?? null;
 }
@@ -34,8 +35,11 @@ export async function apiRequest<T>(method: 'GET' | 'POST', path: string, body?:
     headers,
     body: method === 'POST' ? JSON.stringify(body) : undefined,
   };
+  console.debug('[IP-SAKTI] API request:', { method, url, headers, body });
   const response = await fetch(url, options);
   if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    console.warn('[IP-SAKTI] API error:', response.status, response.statusText, errorBody);
     throw new Error(`Request failed ${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<T>;
@@ -50,11 +54,6 @@ export async function getCurrentUser(): Promise<CurrentUserResponse> {
   return apiRequest<CurrentUserResponse>('GET', '/api/v1/auth/me');
 }
 
-
-
-/**
- * Storage helper for client persistence of requests and responses
- */
 function saveResultToStorage(result: AnalyzeResponse): void {
   try {
     sessionStorage.setItem(`${STORAGE_PREFIX}${result.request_id}`, JSON.stringify(result));
@@ -69,17 +68,15 @@ export function getAnalysisResult(requestId: string): AnalyzeResponse | null {
 
   try {
     const raw = sessionStorage.getItem(`${STORAGE_PREFIX}${requestId}`) ||
-                localStorage.getItem(`${STORAGE_PREFIX}${requestId}`);
+      localStorage.getItem(`${STORAGE_PREFIX}${requestId}`);
     if (raw) {
       const parsed = JSON.parse(raw) as AnalyzeResponse;
-      // Merge any user-updated checklist statuses
       return applySavedChecklistOverrides(parsed);
     }
   } catch (e) {
     console.warn('Failed to retrieve from storage', e);
   }
 
-  // Fallback to sample responses if looking up known mock IDs
   if (requestId === 'req_123' || requestId.includes('patent') || requestId.includes('ayur')) {
     return applySavedChecklistOverrides({
       ...SAMPLE_RESPONSES.patent_india_default,
@@ -128,9 +125,6 @@ export function saveChecklistItemStatus(requestId: string, checklistId: string, 
   }
 }
 
-/**
- * State machine transition definitions
- */
 export const STATE_MACHINE_SEQUENCE: {
   state: AnalysisMachineState;
   displayStage: 'ask' | 'classify' | 'evidence' | 'analyze' | 'verify' | 'decide';
@@ -175,23 +169,17 @@ export const STATE_MACHINE_SEQUENCE: {
   }
 ];
 
-/**
- * Executes analysis against backend API or robust client contract adapter
- */
 export async function submitAnalysisRequest(
   request: AnalyzeRequest,
   onStateChange?: (state: AnalysisMachineState, stage: 'ask' | 'classify' | 'evidence' | 'analyze' | 'verify' | 'decide', detail: string) => void
 ): Promise<AnalyzeResponse> {
-  // Let the caller follow the progressive pipeline stages
   for (const step of STATE_MACHINE_SEQUENCE) {
     if (onStateChange) {
       onStateChange(step.state, step.displayStage, step.message);
     }
-    // Yield to the event loop according to step duration
     await new Promise(resolve => setTimeout(resolve, step.durationMs));
   }
 
-  // Attempt real API call if backend is available
   try {
     const data = await apiRequest<AnalyzeResponse>('POST', '/api/v1/analyze', request);
     saveResultToStorage(data);
@@ -199,17 +187,28 @@ export async function submitAnalysisRequest(
       onStateChange('completed', 'decide', 'Analysis completed successfully.');
     }
     return data;
-  } catch {
-    // Network or backend unavailable — smoothly use contract-compliant response builder
+  } catch (error: any) {
+    console.error('[IP-SAKTI] Real analysis API failed:', error);
+
+    // If mock fallback is explicitly allowed for offline demos, provide marked demo data
+    const allowMock = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
+    if (!allowMock) {
+      throw new Error(error?.message || 'Regulatory analysis backend error');
+    }
+
+    console.warn('[IP-SAKTI] Using offline development mock fallback (unverified demo mode)');
+    const finalResponse = buildDynamicResponse(request);
+    finalResponse.warnings = [
+      'OFFLINE DEV DEMO: Real backend API unreachable. This is an unverified simulation and NOT statutory evidence.',
+      ...finalResponse.warnings,
+    ];
+    finalResponse.decision_state = 'INSUFFICIENT_EVIDENCE';
+    saveResultToStorage(finalResponse);
+
+    if (onStateChange) {
+      onStateChange('completed', 'decide', 'Offline development fallback loaded (unverified).');
+    }
+
+    return finalResponse;
   }
-
-  // Contract-compliant dynamic response
-  const finalResponse = buildDynamicResponse(request);
-  saveResultToStorage(finalResponse);
-
-  if (onStateChange) {
-    onStateChange('completed', 'decide', 'Decision-ready intelligence synthesis completed.');
-  }
-
-  return finalResponse;
 }

@@ -1,14 +1,20 @@
-﻿import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { classifyQuestion } from '../services/questionClassifier';
 import { retrieveKnowledge } from '../services/knowledgeRetrieval';
+import { rerankEvidence } from '../services/reranker';
+import { buildEvidenceContext } from '../services/evidenceBuilder';
+import { generateGroundedAnalysis } from '../services/groundedGeneration';
+import { validateClaims } from '../services/claimValidator';
+import { validateCitations } from '../services/citationValidator';
+import { evaluateDecision } from '../services/decisionEngine';
+import { verifyChecklistAndNextSteps } from '../services/checklistGenerator';
 import { getSupabaseAdmin } from '../services/supabaseAdmin';
 import type {
   AnalyzeRequest,
   AnalyzeResponse,
   ClassificationResult,
   AnswerSection,
-  EvidenceItem,
 } from '../../src/types/api';
 
 const router = express.Router();
@@ -46,35 +52,6 @@ function mapJurisdiction(
     default:
       return requested;
   }
-}
-
-function buildEvidenceItem(
-  result: Awaited<ReturnType<typeof retrieveKnowledge>>[number],
-  index: number,
-): EvidenceItem {
-  const documentName =
-    result.documentTitle ??
-    result.sourceName ??
-    'Knowledge-base document';
-
-  const section =
-    result.subsectionTitle ??
-    result.sectionTitle ??
-    (result.pageNumber !== null ? `Page ${result.pageNumber}` : 'Retrieved section');
-
-  return {
-    id: `evidence_${index + 1}`,
-    title: documentName,
-    excerpt: result.content,
-    authority: result.organization ?? result.sourceName ?? 'Knowledge base',
-    document_name: documentName,
-    document_version: null,
-    section_or_rule: section,
-    publication_date: result.publicationDate,
-    citation_id: result.chunkId,
-    url: result.sourceUrl ?? result.canonicalUrl,
-    authenticity_hash: null,
-  };
 }
 
 function validateRequest(body: unknown): body is AnalyzeRequest {
@@ -142,42 +119,90 @@ router.post(
         });
       }
 
+      // ── Step 1: Question Classification ────────────────────────────────────
       const classification = classifyQuestion(request.question);
-
       const normalizedQuery =
         classification.normalizedQuery?.trim() || request.question.trim();
 
       const retrievalJurisdiction =
         classification.jurisdiction !== 'Unknown'
           ? classification.jurisdiction
-          : undefined;
+          : (request.jurisdiction.code === 'IN' ? 'India' : request.jurisdiction.code);
 
-      const retrievalResults = await retrieveKnowledge(normalizedQuery, {
+      // ── Step 2: Hybrid Knowledge Retrieval ─────────────────────────────────
+      // Retrieve initial candidate pool
+      const candidates = await retrieveKnowledge(normalizedQuery, {
         jurisdiction: retrievalJurisdiction,
-        limit: 10,
+        limit: 25,
       });
 
-      const evidence: EvidenceItem[] = retrievalResults.map(
-        buildEvidenceItem,
+      // ── Step 3: Multi-Factor Deterministic Reranking ────────────────────────
+      const rerankedResults = rerankEvidence(candidates, normalizedQuery, {
+        topK: 6,
+        targetJurisdiction: retrievalJurisdiction,
+        queryIntent: classification.intent,
+      });
+
+      // ── Step 4: Evidence Context & Injection Defense ────────────────────────
+      const { promptText, evidenceItems, evidenceMap } = buildEvidenceContext(rerankedResults);
+      const availableEvidenceIds = evidenceItems.map((e) => e.id);
+
+      // ── Step 5: Grounded LLM Generation ────────────────────────────────────
+      const llmOutput = await generateGroundedAnalysis(
+        request,
+        promptText,
+        availableEvidenceIds,
       );
 
-      const answer: AnswerSection = {
-        summary:
-          evidence.length > 0
-            ? `Retrieved ${evidence.length} relevant evidence item(s) from the knowledge base for this question.`
-            : 'Insufficient evidence was retrieved from the knowledge base to support an answer.',
-        details: evidence.map((item) => {
-          const location =
-            item.section_or_rule ??
-            'retrieved section';
+      // ── Step 6: Grounding & Claim Validation ────────────────────────────────
+      const { validClaims } = validateClaims(
+        llmOutput.claims || [],
+        evidenceMap,
+        evidenceItems,
+      );
 
-          return `${item.document_name} — ${location}: ${item.excerpt}`;
-        }),
-        warnings:
-          evidence.length === 0
-            ? ['No relevant evidence was retrieved from the knowledge base.']
-            : [],
-        statutoryBasis: [],
+      // ── Step 7: Citation Integrity & Verification ──────────────────────────
+      const verifiedCitations = validateCitations(
+        llmOutput.citations || [],
+        evidenceMap,
+      );
+
+      // ── Step 8: Deterministic Decision State & Confidence Engine ───────────
+      const decisionEval = evaluateDecision({
+        classification,
+        retrievedResults: rerankedResults,
+        evidenceItems,
+        validClaims,
+        citations: verifiedCitations,
+        llmRecommendation: llmOutput.decision_state_recommendation,
+      });
+
+      // ── Step 9: Grounded Checklist & Next Steps ────────────────────────────
+      const { checklist, next_steps } = verifyChecklistAndNextSteps({
+        rawChecklist: (llmOutput.checklist || []) as any,
+        rawNextSteps: (llmOutput.next_steps || []) as any,
+        evidenceMap,
+        availableEvidence: evidenceItems,
+      });
+
+      // ── Step 10: Assemble Synthesized Answer Section ───────────────────────
+      const combinedWarnings = [
+        ...(llmOutput.warnings || []),
+        ...(classification.requiresHumanReview
+          ? ['Human review is recommended based on high regulatory sensitivity.']
+          : []),
+        ...(decisionEval.decisionState === 'INSUFFICIENT_EVIDENCE'
+          ? [decisionEval.rationale]
+          : []),
+      ];
+
+      const answer: AnswerSection = {
+        summary: llmOutput.summary,
+        details: llmOutput.details && llmOutput.details.length > 0
+          ? llmOutput.details
+          : evidenceItems.map((item) => `${item.document_name} — ${item.section_or_rule}: ${item.excerpt}`),
+        warnings: combinedWarnings,
+        statutoryBasis: llmOutput.statutoryBasis || ['The Drugs Rules, 1945'],
       };
 
       const classificationResult: ClassificationResult = {
@@ -186,20 +211,18 @@ router.post(
           classification.jurisdiction,
           request.jurisdiction.code,
         ),
-        confidence: classification.confidence,
+        confidence: decisionEval.confidenceScore,
         subdomains: [
           classification.intent,
           classification.productCategory,
         ].filter(Boolean),
-        rationale: `Deterministic classifier identified jurisdiction=${classification.jurisdiction}, domain=${classification.domain}, intent=${classification.intent}, productCategory=${classification.productCategory}.`,
+        rationale: `Classified as domain=${classification.domain}, jurisdiction=${classification.jurisdiction}, intent=${classification.intent}. Decision: ${decisionEval.decisionState} (${decisionEval.reliabilityLabel}).`,
       };
 
+      // ── Step 11: Database Persistence ──────────────────────────────────────
       const supabase = getSupabaseAdmin();
 
-      const {
-        data: requestData,
-        error: requestError,
-      } = await supabase
+      const { data: requestData, error: requestError } = await supabase
         .from('analysis_requests')
         .insert([
           {
@@ -224,21 +247,18 @@ router.post(
         classification: classificationResult,
         original_request: request,
         answer,
-        claims: [],
-        evidence,
-        citations: [],
-        checklist: [],
-        warnings:
-          classification.requiresHumanReview
-            ? [
-                'Human review is recommended based on the classifier result.',
-                ...answer.warnings,
-              ]
-            : answer.warnings,
-        next_steps: [],
+        claims: validClaims,
+        evidence: evidenceItems,
+        citations: verifiedCitations,
+        checklist,
+        warnings: combinedWarnings,
+        next_steps,
+        decision_state: decisionEval.decisionState,
+        confidence_score: decisionEval.confidenceScore,
+        reliability_level: decisionEval.reliabilityLevel,
       };
 
-      const { error: analysisError } = await supabase
+      const { data: analysisData, error: analysisError } = await supabase
         .from('analyses')
         .insert([
           {
@@ -247,13 +267,31 @@ router.post(
             status: 'completed',
             result: response,
           },
-        ]);
+        ])
+        .select('id')
+        .single();
 
       if (analysisError) {
         console.error('Failed to persist analysis:', analysisError);
         return res.status(500).json({
           error: 'Failed to persist analysis',
         });
+      }
+
+      // Persist checklist
+      if (checklist.length > 0 && analysisData?.id) {
+        const { error: chkError } = await supabase
+          .from('checklists')
+          .insert([
+            {
+              analysis_id: analysisData.id,
+              user_id: userId,
+              checklist,
+            },
+          ]);
+        if (chkError) {
+          console.warn('Checklist persistence warning:', chkError.message);
+        }
       }
 
       return res.status(200).json(response);

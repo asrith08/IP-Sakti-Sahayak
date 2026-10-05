@@ -16,21 +16,65 @@ interface ResultOverviewProps {
 
 export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
   const { classification, answer, original_request } = data;
-  const confidencePercent = (classification.confidence * 100).toFixed(0);
+  const confidenceValue = data.confidence_score !== undefined
+    ? data.confidence_score
+    : (classification.confidence || 0.5);
+  const confidencePercent = Math.round(confidenceValue * 100);
+
+  // Truthful verification status
+  const hasVerifiedCitations = data.citations && data.citations.length > 0;
+  const hasEvidence = data.evidence && data.evidence.length > 0;
+
+  // Truthful reliability label & explanation
+  const isInsufficient = data.decision_state === 'INSUFFICIENT_EVIDENCE';
+  const reliabilityLabel = isInsufficient
+    ? 'Insufficient Basis'
+    : confidencePercent >= 75
+    ? 'High Reliability'
+    : confidencePercent >= 50
+    ? 'Moderate Reliability'
+    : 'Preliminary Guidance';
+
+  const reliabilityColor = isInsufficient
+    ? 'text-amber-400'
+    : confidencePercent >= 75
+    ? 'text-[#2dd4bf]'
+    : confidencePercent >= 50
+    ? 'text-[#dfbe7b]'
+    : 'text-amber-400';
+
+  const reliabilityDescription = isInsufficient
+    ? 'Knowledge base lacks direct statutory clauses for this specific query.'
+    : confidencePercent >= 75
+    ? 'Calculated from primary statutory gazettes (The Drugs Rules, 1945 / CDSCO).'
+    : 'Supported by partial statutory evidence; state licensing authority filing required.';
 
   return (
     <div className="space-y-6">
       
       {/* 1. Question & Request Metadata Banner */}
-      <div className="bg-[#0b1813] border border-[#c8a45d]/30 rounded-2xl p-6 shadow-xl">
+      <div className="bg-[#0b1813] border border-[#c8a45d]/30 rounded-2xl p-6 shadow-xl transition-all duration-300 hover:border-[#c8a45d]/45">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-4 border-b border-[#1c3e32]">
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-xs text-[#c8a45d] px-2.5 py-1 rounded bg-[#08130f] border border-[#c8a45d]/20">
               DOSSIER ID: {data.request_id}
             </span>
             <span className="text-xs text-[#d6ccb6]/70 font-mono">
               Status: <span className="text-[#2dd4bf] font-semibold uppercase">{data.status}</span>
             </span>
+            {data.decision_state && (
+              <span className={`text-[11px] font-mono px-2.5 py-0.5 rounded-full border ${
+                data.decision_state === 'SUPPORTED'
+                  ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/30'
+                  : data.decision_state === 'PARTIALLY_SUPPORTED'
+                  ? 'bg-teal-950/60 text-teal-300 border-teal-500/30'
+                  : data.decision_state === 'INSUFFICIENT_EVIDENCE'
+                  ? 'bg-amber-950/60 text-amber-300 border-amber-500/30'
+                  : 'bg-rose-950/60 text-rose-300 border-rose-500/30'
+              }`}>
+                DECISION: {data.decision_state}
+              </span>
+            )}
           </div>
           <div className="text-xs text-[#d6ccb6]/60 font-mono">
             Generated: {data.timestamp ? new Date(data.timestamp).toLocaleDateString() : 'Official Snapshot'}
@@ -58,7 +102,7 @@ export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         
         {/* Domain Classification */}
-        <div className="bg-[#0b1813] border border-[#c8a45d]/25 rounded-2xl p-5 flex flex-col justify-between">
+        <div className="bg-[#0b1813] border border-[#c8a45d]/25 rounded-2xl p-5 flex flex-col justify-between transition-all duration-300 hover:border-[#c8a45d]/40 hover:-translate-y-0.5">
           <div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-mono uppercase tracking-wider text-[#c8a45d]">
@@ -86,7 +130,7 @@ export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
         </div>
 
         {/* Statutory Jurisdiction */}
-        <div className="bg-[#0b1813] border border-[#c8a45d]/25 rounded-2xl p-5 flex flex-col justify-between">
+        <div className="bg-[#0b1813] border border-[#c8a45d]/25 rounded-2xl p-5 flex flex-col justify-between transition-all duration-300 hover:border-[#c8a45d]/40 hover:-translate-y-0.5">
           <div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-mono uppercase tracking-wider text-[#c8a45d]">
@@ -105,33 +149,52 @@ export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
             </p>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-[#1c3e32] text-xs font-mono text-[#2dd4bf] flex items-center space-x-1.5">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Statutory Gazette Verified</span>
+          <div className="mt-4 pt-3 border-t border-[#1c3e32] text-xs font-mono flex items-center space-x-1.5">
+            {isInsufficient ? (
+              <>
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-amber-400">Insufficient Statutory Evidence</span>
+              </>
+            ) : hasVerifiedCitations ? (
+              <>
+                <ShieldCheck className="w-3.5 h-3.5 text-[#2dd4bf]" />
+                <span className="text-[#2dd4bf]">Statutory Gazette Verified</span>
+              </>
+            ) : hasEvidence ? (
+              <>
+                <FileCheck2 className="w-3.5 h-3.5 text-[#dfbe7b]" />
+                <span className="text-[#dfbe7b]">Evidence Retrieved ({data.evidence.length} Chunks)</span>
+              </>
+            ) : (
+              <>
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-amber-400">Pending Statutory Verification</span>
+              </>
+            )}
           </div>
         </div>
 
         {/* 9. Evidentiary Confidence Index */}
-        <div className="bg-[#0b1813] border border-[#c8a45d]/25 rounded-2xl p-5 flex flex-col justify-between">
+        <div className="bg-[#0b1813] border border-[#c8a45d]/25 rounded-2xl p-5 flex flex-col justify-between transition-all duration-300 hover:border-[#c8a45d]/40 hover:-translate-y-0.5">
           <div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-mono uppercase tracking-wider text-[#c8a45d]">
                 Evidentiary Confidence
               </span>
-              <TrendingUp className="w-4 h-4 text-[#2dd4bf]" />
+              <TrendingUp className={`w-4 h-4 ${reliabilityColor}`} />
             </div>
             <div className="flex items-baseline space-x-2 mb-1">
               <span className="text-3xl font-bold text-[#f5f1e7] font-mono">{confidencePercent}%</span>
-              <span className="text-xs font-mono text-[#2dd4bf]">High Reliability</span>
+              <span className={`text-xs font-mono ${reliabilityColor}`}>{reliabilityLabel}</span>
             </div>
             <p className="text-xs text-[#d6ccb6]/80 leading-relaxed font-sans">
-              Calculated from primary statutory gazettes, codified pharmacopoeial monographs, and court rulings.
+              {reliabilityDescription}
             </p>
           </div>
 
           <div className="mt-4 pt-3 border-t border-[#1c3e32] flex items-center justify-between text-xs font-mono text-[#d6ccb6]/70">
-            <span>Traceable Sources: {data.citations.length}</span>
-            <span>Claims: {data.claims.length}</span>
+            <span>Traceable Sources: {data.citations?.length || 0}</span>
+            <span>Claims: {data.claims?.length || 0}</span>
           </div>
         </div>
 
