@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { buildSystemInstructions } from './evidenceBuilder';
 import type { AnalyzeRequest } from '../../src/types/api';
+import type { RetrievalResult } from './knowledgeRetrieval';
 
 let _ai: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI {
@@ -62,7 +63,8 @@ export interface GeneratedLLMOutput {
 export async function generateGroundedAnalysis(
   request: AnalyzeRequest,
   evidencePromptText: string,
-  availableEvidenceIds: string[]
+  availableEvidenceIds: string[],
+  evidenceMap?: Map<string, RetrievalResult>
 ): Promise<GeneratedLLMOutput> {
   // If no evidence is available, return deterministic insufficient evidence output
   if (availableEvidenceIds.length === 0) {
@@ -122,7 +124,7 @@ You MUST respond with a single valid JSON object with the following exact keys:
 {
   "summary": "Concise factual summary strictly grounded in the evidence",
   "details": ["Specific statutory provisions and findings from the evidence, citing rule/section"],
-  "warnings": ["Statutory warnings, exclusions, or notice of any unaddressed aspects of the user query"],
+  "warnings": ["Statutory warnings, exclusions, or notice of any unaddressed aspects of the user query (e.g. state rules, patents, foreign laws)"],
   "statutoryBasis": ["List of specific rules, acts, schedules, or forms mentioned in the evidence"],
   "claims": [
     {
@@ -140,8 +142,8 @@ You MUST respond with a single valid JSON object with the following exact keys:
       "jurisdiction": "India",
       "document_title": "The Drugs Rules, 1945",
       "gazette_or_reg_number": "Rule / Section from evidence",
-      "version": "1945 (as amended)",
-      "effective_date": "1945",
+      "version": "Statutory Rules (1945, as amended)",
+      "effective_date": "1945-12-21",
       "official_url": "URL from evidence",
       "verification_status": "statutory_act" | "verified_official"
     }
@@ -197,12 +199,8 @@ DO NOT output markdown code fences if possible, or wrap in \`\`\`json. Output ON
       } catch (err: any) {
         lastError = err;
         const msg = String(err?.message || err);
-        const isUnavailable = msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('404');
-        if (isUnavailable) {
-          console.warn(`[IP-SAKTI] Model ${modelName} unavailable (${msg.slice(0, 70)}), trying fallback...`);
-          continue;
-        }
-        break;
+        console.warn(`[IP-SAKTI] Model ${modelName} failed (${msg.slice(0, 80)}), trying fallback...`);
+        continue;
       }
     }
 
@@ -229,47 +227,65 @@ DO NOT output markdown code fences if possible, or wrap in \`\`\`json. Output ON
   } catch (error: any) {
     console.error('[IP-SAKTI] Grounded LLM generation error:', error?.message ?? error);
     // Provide safe deterministic fallback synthesized directly from available evidence
-    return buildDeterministicFallback(request, availableEvidenceIds);
+    return buildDeterministicFallback(request, availableEvidenceIds, evidenceMap);
   }
 }
 
 function buildDeterministicFallback(
   request: AnalyzeRequest,
-  availableEvidenceIds: string[]
+  availableEvidenceIds: string[],
+  evidenceMap?: Map<string, RetrievalResult>
 ): GeneratedLLMOutput {
+  const topIds = availableEvidenceIds.slice(0, 3);
+  const groundedClaims: GeneratedLLMOutput['claims'] = [];
+  const groundedCitations: GeneratedLLMOutput['citations'] = [];
+  const detailsList: string[] = [];
+
+  for (const id of topIds) {
+    const ret = evidenceMap?.get(id);
+    const secTitle = ret?.sectionTitle ? ret.sectionTitle.replace(/\s+/g, ' ').trim() : 'The Drugs Rules, 1945';
+    const excerptClean = ret?.content ? ret.content.replace(/\s+/g, ' ').trim() : '';
+    const shortSnippet = excerptClean.slice(0, 160).replace(/[.,;:]*$/, '');
+
+    groundedClaims.push({
+      claim_text: `Under ${secTitle} of The Drugs Rules, 1945, statutory standards require: ${shortSnippet}.`,
+      status: 'conditional',
+      category: 'Regulatory Licensing',
+      evidence_ids: [id],
+      impact_summary: `Compliance with statutory provisions in ${secTitle} is required prior to commercial distribution.`,
+    });
+
+    groundedCitations.push({
+      evidence_id: id,
+      authority_name: ret?.organization || ret?.sourceName || 'Central Drugs Standard Control Organisation',
+      jurisdiction: 'India',
+      document_title: 'The Drugs Rules, 1945',
+      gazette_or_reg_number: secTitle,
+      version: 'Statutory Rules (1945, as amended)',
+      effective_date: ret?.publicationDate || '1945-12-21',
+      official_url: ret?.sourceUrl || ret?.canonicalUrl || 'https://www.cdsco.gov.in/opencms/opencms/en/Acts-and-rules/Drugs-Rules/',
+      verification_status: 'statutory_act',
+    });
+
+    detailsList.push(`The Drugs Rules, 1945 — ${secTitle}: ${shortSnippet}`);
+  }
+
   return {
     summary: `Identified ${availableEvidenceIds.length} authoritative statutory provision(s) from The Drugs Rules, 1945 applicable to the inquiry regarding "${request.question}".`,
-    details: [
-      'Statutory provisions under The Drugs Rules, 1945 govern the manufacturing, licensing, and standards for drugs and Ayurvedic/Siddha/Unani preparations in India.',
-      'Manufacture and commercial distribution require an applicable manufacturing or loan licence issued by the State Licensing Authority in prescribed forms (such as Form 24E / Form 20C).',
+    details: detailsList.length > 0 ? detailsList : [
+      'Statutory provisions under The Drugs Rules, 1945 govern the manufacturing, licensing, and standards for drugs and Ayurvedic preparations in India.',
     ],
     warnings: [
       'Automated LLM synthesis encountered a provider timeout; deterministic extraction from knowledge base chunks was applied.',
       'Ensure verification of current state amendments with the State Licensing Authority.',
     ],
-    statutoryBasis: ['The Drugs Rules, 1945', 'The Drugs and Cosmetics Act, 1940'],
-    claims: availableEvidenceIds.slice(0, 3).map((id, index) => ({
-      claim_text: `Manufacturing and commercial sale of Ayurvedic preparations in India is subject to statutory licensing and standards under The Drugs Rules, 1945.`,
-      status: 'conditional' as const,
-      category: 'Regulatory Licensing',
-      evidence_ids: [id],
-      impact_summary: 'Mandatory compliance with statutory licensing and standards prior to commercial sale.',
-    })),
-    citations: availableEvidenceIds.slice(0, 3).map((id) => ({
-      evidence_id: id,
-      authority_name: 'Central Drugs Standard Control Organisation',
-      jurisdiction: 'India',
-      document_title: 'The Drugs Rules, 1945',
-      gazette_or_reg_number: 'The Drugs Rules, 1945',
-      version: '1945 (as amended)',
-      effective_date: '1945-12-21',
-      official_url: 'https://www.cdsco.gov.in/opencms/opencms/en/Acts-and-rules/Drugs-Rules/',
-      verification_status: 'statutory_act' as const,
-    })),
+    statutoryBasis: ['The Drugs Rules, 1945'],
+    claims: groundedClaims,
+    citations: groundedCitations,
     checklist: [
       {
-        title: 'Obtain Manufacturing / Loan Licence in Prescribed Form',
-        description: 'Submit application in the prescribed Form to the State Licensing Authority along with prescribed inspection fees.',
+        title: 'Verify Manufacturing / Loan Licence Eligibility',
+        description: 'Confirm that manufacturing premises and technical staff satisfy statutory requirements under The Drugs Rules, 1945.',
         priority: 'CRITICAL',
         status: 'pending',
         evidence_references: availableEvidenceIds.slice(0, 1),
@@ -281,7 +297,7 @@ function buildDeterministicFallback(
         action: 'Prepare statutory application for State Licensing Authority (AYUSH)',
         timeline: 'Before commercial manufacture or sale',
         authority_to_approach: 'State Licensing Authority / CDSCO',
-        guidance_note: 'Ensure premises and testing comply with Schedule T Good Manufacturing Practices.',
+        guidance_note: 'Ensure premises and testing conform to statutory standards.',
       },
     ],
     decision_state_recommendation: 'PARTIALLY_SUPPORTED',

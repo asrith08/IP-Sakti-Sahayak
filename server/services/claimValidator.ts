@@ -7,14 +7,29 @@ export interface ValidatedClaimsResult {
   verifiedEvidenceCount: number;
 }
 
+function stemWord(word: string): string {
+  let w = word.toLowerCase();
+  if (w.endsWith('ing') && w.length > 5) w = w.slice(0, -3);
+  else if (w.endsWith('tion') && w.length > 6) w = w.slice(0, -4);
+  else if (w.endsWith('ment') && w.length > 6) w = w.slice(0, -4);
+  else if (w.endsWith('ence') && w.length > 6) w = w.slice(0, -4);
+  else if (w.endsWith('ance') && w.length > 6) w = w.slice(0, -4);
+  else if (w.endsWith('ies') && w.length > 5) w = w.slice(0, -3) + 'y';
+  else if (w.endsWith('es') && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith('ed') && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith('ly') && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith('s') && w.length > 3) w = w.slice(0, -1);
+  return w;
+}
+
 /**
  * Deterministic Claim Grounding Validator.
  * Verifies that:
  * 1. Referenced evidence IDs exist in the retrieved evidence set.
  * 2. The referenced evidence content is non-empty and substantive.
- * 3. Terms from the claim have factual basis in the cited evidence.
+ * 3. Terms from the claim have factual basis in the cited evidence (with stemming support).
  * 4. Claim status conforms to evidence conditions (e.g. conditional if licenses/prerequisites are required).
- * 5. Rejects unsupported or hallucinated claims.
+ * 5. Rejects unsupported or hallucinated claims, including fabricated forms/sections.
  */
 export function validateClaims(
   rawClaims: Array<{
@@ -57,13 +72,35 @@ export function validateClaims(
       continue;
     }
 
-    // Validate that evidence content actually touches on the substantive subject matter
     const lowerClaim = raw.claim_text.toLowerCase();
+
+    // Fabricated statutory section / form check:
+    // If claim asserts a specific section, rule, schedule, or form, at least one cited evidence chunk must contain it
+    const specificRefMatch = lowerClaim.match(/\b(form\s+[0-9a-z]+|rule\s+\d+[a-z]?|schedule\s+[0-9a-z()]+|section\s+\d+[a-z()]*)\b/i);
+    if (specificRefMatch) {
+      const referencedProvision = specificRefMatch[0].toLowerCase().replace(/\s+/g, ' ');
+      const provisionFoundInEvidence = verifiedIds.some((eid) => {
+        const res = evidenceMap.get(eid);
+        if (!res) return false;
+        const evFull = `${res.content} ${res.sectionTitle || ''} ${res.subsectionTitle || ''}`.toLowerCase().replace(/\s+/g, ' ');
+        return evFull.includes(referencedProvision);
+      });
+
+      if (!provisionFoundInEvidence) {
+        rejectedClaims.push({
+          claim: raw,
+          reason: `Claim references specific statutory provision "${specificRefMatch[0]}" not substantiated in cited evidence chunks`,
+        });
+        continue;
+      }
+    }
+
+    // Common grammatical stop words
     const commonWords = new Set([
       'that', 'this', 'with', 'from', 'have', 'been', 'were', 'will', 'must',
       'shall', 'under', 'these', 'those', 'other', 'their', 'which', 'about',
-      'there', 'where', 'after', 'before', 'being', 'product', 'drugs', 'rules',
-      'india', 'ayurvedic', 'medicine', 'medicines', 'apply', 'applied'
+      'there', 'where', 'after', 'before', 'being', 'product', 'apply', 'applied',
+      'each', 'such', 'into', 'only', 'than', 'some', 'more', 'when', 'also'
     ]);
 
     const substantiveKeywords = lowerClaim
@@ -71,18 +108,30 @@ export function validateClaims(
       .split(/\s+/)
       .filter((w) => w.length >= 4 && !commonWords.has(w));
 
+    const substantiveStems = substantiveKeywords.map((w) => stemWord(w));
+
     let hasSubstantiveSupport = false;
     let matchedTermsCount = 0;
 
     for (const eid of verifiedIds) {
       const res = evidenceMap.get(eid);
       if (res && res.content) {
-        const lowerEv = res.content.toLowerCase();
-        const matches = substantiveKeywords.filter((k) => lowerEv.includes(k));
+        const lowerEv = `${res.content} ${res.sectionTitle || ''}`.toLowerCase();
+        const evWords = lowerEv
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .split(/\s+/)
+          .filter((w) => w.length >= 3);
+        const evStems = new Set(evWords.map((w) => stemWord(w)));
+
+        const matches = substantiveKeywords.filter((k, idx) => {
+          const stem = substantiveStems[idx];
+          return lowerEv.includes(k) || evStems.has(stem) || evWords.some((ew) => ew.startsWith(stem) || stem.startsWith(ew));
+        });
+
         matchedTermsCount = Math.max(matchedTermsCount, matches.length);
 
         // Meaningful support requires:
-        // - At least 2 substantive keywords, OR
+        // - At least 2 substantive keywords (or stems), OR
         // - At least 25% of substantive keywords if there are 4+, OR
         // - Direct mention of specific regulatory forms/clauses (e.g. form 24e, 20c, schedule, 157, 160)
         const hasSpecificFormOrClause = /form\s+\w+|rule\s+\d+|schedule\s+\w+|section\s+\d+/i.test(lowerClaim) &&
@@ -110,7 +159,7 @@ export function validateClaims(
     let finalStatus = raw.status;
     if (
       finalStatus === 'valid' &&
-      /licence|license|permission|approval|subject to|compl|fee|form|condition/i.test(lowerClaim)
+      /licence|license|permission|approval|subject to|compl|fee|form|condition|prescribed/i.test(lowerClaim)
     ) {
       finalStatus = 'conditional';
     }
@@ -121,7 +170,7 @@ export function validateClaims(
     }
 
     validClaims.push({
-      id: `claim_${i + 1}`,
+      id: `claim_${validClaims.length + 1}`,
       claim_text: raw.claim_text.trim(),
       status: finalStatus,
       category: raw.category || 'Regulatory Compliance',

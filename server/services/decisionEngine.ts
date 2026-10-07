@@ -79,7 +79,6 @@ export function evaluateDecision(params: {
   }
 
   // 6. Conflicting sources check
-  // (In current repository, all 900 chunks belong to The Drugs Rules 1945 CDSCO, no contradictory acts yet)
   const hasContradictions = false;
 
   // 7. Target jurisdiction evidence relevance check
@@ -93,55 +92,64 @@ export function evaluateDecision(params: {
     return itemJur === targetJurisdiction.toLowerCase();
   });
 
-  // ── Calculate Data-Driven Confidence Score ─────────────────────────────────
-  // Formula:
-  // Confidence = 0.35 * avgRelevance + 0.25 * avgAuthority + 0.15 * countScore + 0.15 * claimGrounding + 0.10 * citationCoverage
-  let computedConfidence = 0;
-  if (evidenceCount > 0 && (isIndiaTarget || hasJurisdictionEvidence)) {
-    computedConfidence =
-      0.35 * avgRelevance +
-      0.25 * avgAuthority +
-      0.15 * countScore +
-      0.15 * claimGrounding +
-      0.10 * citationCoverage;
-  } else {
-    // Zero relevant evidence for the target jurisdiction receives baseline floor confidence
-    computedConfidence = 0.15;
-  }
-
-  // Cap confidence at 0.92 maximum (legal/regulatory conclusions always require attorney sign-off)
-  computedConfidence = Math.max(0.1, Math.min(0.92, Math.round(computedConfidence * 100) / 100));
-  const confidencePercent = Math.round(computedConfidence * 100);
+  // 8. Domain corpus check: verify if indexed documents actually cover the queried domain
+  // Currently, the database ONLY contains The Drugs Rules, 1945 (Drug Regulation, India).
+  // It does NOT contain The Patents Act, 1970 or The Trade Marks Act, 1999.
+  const isPurePatentQuery = (classification.domain === 'Patent' || classification.intent === 'Patentability' || classification.intent === 'PriorArt') && !classification.hasMultipleDomains;
+  const isPureTrademarkQuery = (classification.domain === 'Trademark' || classification.intent === 'Trademark') && !classification.hasMultipleDomains;
+  const hasPatentCorpus = retrievedResults.some((r) => (r.documentType === 'patent_statute' || (r.documentTitle || '').toLowerCase().includes('patents act')));
+  const hasTrademarkCorpus = retrievedResults.some((r) => (r.documentType === 'trademark_statute' || (r.documentTitle || '').toLowerCase().includes('trade marks act')));
 
   // ── Determine Truthful Decision State ──────────────────────────────────────
   let decisionState: DecisionState = 'SUPPORTED';
   let rationale = '';
 
-  // Rule A: Zero evidence, foreign jurisdiction with zero relevant evidence, or relevance below baseline -> INSUFFICIENT_EVIDENCE
-  if (evidenceCount === 0 || (!isIndiaTarget && !hasJurisdictionEvidence) || topRelevance < 0.35) {
-    decisionState = 'INSUFFICIENT_EVIDENCE';
-    if (!isIndiaTarget && !hasJurisdictionEvidence && evidenceCount > 0) {
-      rationale = `The knowledge base contains zero statutory documentation for jurisdiction "${targetJurisdiction}". Indian statutory rules (The Drugs Rules, 1945) cannot establish foreign regulatory requirements.`;
-    } else {
-      rationale = 'The knowledge base contains insufficient statutory documentation to substantiate requirements for this specific query.';
-    }
-  }
-  // Rule B: Classifier explicitly flagged high risk or question requires professional attorney/clinical judgment
-  else if (classification.requiresHumanReview || classification.riskLevel === 'High') {
+  // Rule 1: High risk / immediate commercial launch without approval -> HUMAN_REVIEW_REQUIRED
+  if (classification.riskLevel === 'High' || classification.requiresHumanReview) {
     decisionState = 'HUMAN_REVIEW_REQUIRED';
-    rationale = 'The inquiry touches on high-risk regulatory classifications or patentability boundaries that require verified legal/clinical counsel.';
+    rationale = 'The inquiry involves high-risk regulatory action (such as immediate commercial launch without formal regulatory clearance). Commercial distribution of medicinal or botanical preparations without statutory compliance requires qualified legal and regulatory counsel.';
   }
-  // Rule C: Conflicting statutory sources detected
+  // Rule 2: Pure Patent question when Patents Act is not in repository -> INSUFFICIENT_EVIDENCE
+  else if (isPurePatentQuery && !hasPatentCorpus) {
+    decisionState = 'INSUFFICIENT_EVIDENCE';
+    rationale = 'The knowledge base currently contains The Drugs Rules, 1945 (CDSCO, India) and does not contain The Patents Act, 1970 or The Patents Rules, 2003. Statutory requirements for patentability under Indian law cannot be established from drug rules.';
+  }
+  // Rule 3: Pure Trademark question when Trade Marks Act is not in repository -> INSUFFICIENT_EVIDENCE
+  else if (isPureTrademarkQuery && !hasTrademarkCorpus) {
+    decisionState = 'INSUFFICIENT_EVIDENCE';
+    rationale = 'The knowledge base currently contains The Drugs Rules, 1945 (CDSCO, India) and does not contain The Trade Marks Act, 1999 or The Trade Marks Rules, 2017. Statutory requirements for trademark registration cannot be established from drug rules.';
+  }
+  // Rule 4: Specific Gazette notification number requested but not verified in evidence -> INSUFFICIENT_EVIDENCE
+  else if (classification.isSpecificNotificationRequest) {
+    decisionState = 'INSUFFICIENT_EVIDENCE';
+    rationale = 'The requested specific Gazette notification number is not established in the indexed statutory corpus. Official Gazette repository verification with the Ministry / CDSCO is required.';
+  }
+  // Rule 5: Foreign jurisdiction with zero relevant evidence -> INSUFFICIENT_EVIDENCE
+  else if (!isIndiaTarget && !hasJurisdictionEvidence) {
+    decisionState = 'INSUFFICIENT_EVIDENCE';
+    rationale = `The knowledge base contains zero statutory documentation for jurisdiction "${targetJurisdiction}". Indian statutory rules (The Drugs Rules, 1945) cannot establish foreign regulatory requirements.`;
+  }
+  // Rule 6: Zero evidence or top relevance below baseline -> INSUFFICIENT_EVIDENCE
+  else if (evidenceCount === 0 || topRelevance < 0.35) {
+    decisionState = 'INSUFFICIENT_EVIDENCE';
+    rationale = 'The knowledge base contains insufficient statutory documentation to substantiate requirements for this specific query.';
+  }
+  // Rule 7: Conflicting statutory sources detected
   else if (llmRecommendation === 'CONFLICTING_SOURCES') {
     decisionState = 'CONFLICTING_SOURCES';
     rationale = 'Retrieved statutory sources or regulatory notifications contain contradictory provisions that require legal reconciliation.';
   }
-  // Rule D: Moderate to high evidence (top relevance >= 0.65, authority Tier 1, claims validated)
+  // Rule 8: Multi-domain inquiry (some domains supported, others not) -> PARTIALLY_SUPPORTED
+  else if (classification.hasMultipleDomains) {
+    decisionState = 'PARTIALLY_SUPPORTED';
+    rationale = 'Statutory provisions under The Drugs Rules, 1945 substantiate manufacturing, licensing, and standards requirements. Other requested domains (patents, trademarks, GST, clinical evidence) are not established by the currently indexed corpus.';
+  }
+  // Rule 9: Moderate to high evidence for Indian regulatory query
   else if (topRelevance >= 0.65 && avgAuthority >= 0.8 && validClaims.length >= 1) {
-    // If LLM recommendation is PARTIALLY_SUPPORTED or SUPPORTED, adopt based on completeness
-    if (llmRecommendation === 'SUPPORTED' && validClaims.length >= 2) {
+    // If query is specifically about Drugs Rules / manufacturing licences and claims are verified
+    if (llmRecommendation === 'SUPPORTED' && validClaims.length >= 2 && classification.domain === 'Regulatory') {
       decisionState = 'SUPPORTED';
-      rationale = 'Primary statutory gazettes from CDSCO (The Drugs Rules, 1945) directly substantiate the applicable regulatory requirements.';
+      rationale = 'Primary statutory rules from CDSCO (The Drugs Rules, 1945) directly substantiate the applicable regulatory requirements.';
     } else {
       decisionState = 'PARTIALLY_SUPPORTED';
       rationale = 'Statutory licensing provisions from The Drugs Rules, 1945 were retrieved and verified, but procedural state-level or formulation-specific filings remain subject to licensing authority verification.';
@@ -151,6 +159,30 @@ export function evaluateDecision(params: {
     rationale = 'Partial statutory evidence located; further administrative or clinical documentation is required for complete regulatory clearance.';
   }
 
+  // ── Calculate Data-Driven Confidence Score ─────────────────────────────────
+  // Formula:
+  // Confidence = 0.35 * avgRelevance + 0.25 * avgAuthority + 0.15 * countScore + 0.15 * claimGrounding + 0.10 * citationCoverage
+  let computedConfidence = 0;
+  if (decisionState === 'INSUFFICIENT_EVIDENCE') {
+    // Zero relevant evidence or out-of-scope query receives baseline floor confidence
+    computedConfidence = 0.15;
+  } else if (decisionState === 'HUMAN_REVIEW_REQUIRED') {
+    computedConfidence = 0.35;
+  } else if (evidenceCount > 0 && (isIndiaTarget || hasJurisdictionEvidence)) {
+    computedConfidence =
+      0.35 * avgRelevance +
+      0.25 * avgAuthority +
+      0.15 * countScore +
+      0.15 * claimGrounding +
+      0.10 * citationCoverage;
+  } else {
+    computedConfidence = 0.15;
+  }
+
+  // Cap confidence at 0.92 maximum (legal/regulatory conclusions always require attorney sign-off)
+  computedConfidence = Math.max(0.1, Math.min(0.92, Math.round(computedConfidence * 100) / 100));
+  const confidencePercent = Math.round(computedConfidence * 100);
+
   // ── Reliability Level ───────────────────────────────────────────────────────
   let reliabilityLevel: ReliabilityLevel = 'moderate';
   let reliabilityLabel = 'Moderate Reliability';
@@ -158,10 +190,13 @@ export function evaluateDecision(params: {
   if (decisionState === 'INSUFFICIENT_EVIDENCE') {
     reliabilityLevel = 'insufficient';
     reliabilityLabel = 'Insufficient Evidentiary Basis';
+  } else if (decisionState === 'HUMAN_REVIEW_REQUIRED') {
+    reliabilityLevel = 'preliminary';
+    reliabilityLabel = 'Human Review Required — High Regulatory Sensitivity';
   } else if (computedConfidence >= 0.75 && decisionState === 'SUPPORTED') {
     reliabilityLevel = 'high';
     reliabilityLabel = 'High Reliability — Primary Statutory Grounding';
-  } else if (computedConfidence >= 0.5) {
+  } else if (decisionState === 'PARTIALLY_SUPPORTED') {
     reliabilityLevel = 'moderate';
     reliabilityLabel = 'Moderate Reliability — Partial Statutory Grounding';
   } else {

@@ -27,27 +27,36 @@ export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
 
   // Truthful reliability label & explanation
   const isInsufficient = data.decision_state === 'INSUFFICIENT_EVIDENCE';
+  const isHumanReview = data.decision_state === 'HUMAN_REVIEW_REQUIRED';
+  const isPartial = data.decision_state === 'PARTIALLY_SUPPORTED';
+
   const reliabilityLabel = isInsufficient
     ? 'Insufficient Basis'
+    : isHumanReview
+    ? 'Human Review Required'
+    : isPartial
+    ? 'Moderate Reliability (Partial Coverage)'
     : confidencePercent >= 75
     ? 'High Reliability'
-    : confidencePercent >= 50
-    ? 'Moderate Reliability'
     : 'Preliminary Guidance';
 
   const reliabilityColor = isInsufficient
     ? 'text-amber-400'
+    : isHumanReview
+    ? 'text-rose-400'
+    : isPartial
+    ? 'text-[#dfbe7b]'
     : confidencePercent >= 75
     ? 'text-[#2dd4bf]'
-    : confidencePercent >= 50
-    ? 'text-[#dfbe7b]'
     : 'text-amber-400';
 
   const reliabilityDescription = isInsufficient
     ? 'Knowledge base lacks direct statutory clauses for this specific query.'
-    : confidencePercent >= 75
-    ? 'Calculated from primary statutory gazettes (The Drugs Rules, 1945 / CDSCO).'
-    : 'Supported by partial statutory evidence; state licensing authority filing required.';
+    : isHumanReview
+    ? 'High regulatory sensitivity; verified legal/clinical counsel required.'
+    : isPartial
+    ? 'Supported by partial statutory evidence; state licensing authority filing or out-of-scope verification required.'
+    : 'Calculated from primary statutory rules (The Drugs Rules, 1945 / CDSCO).';
 
   return (
     <div className="space-y-6">
@@ -145,7 +154,9 @@ export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
                classification.jurisdiction === 'WO' ? 'WIPO International' : 'Cross-Border Comparison'}
             </div>
             <p className="text-xs text-[#d6ccb6]/80 leading-relaxed font-sans">
-              Governed by territorial patent office directives and designated national botanical health authorities.
+              {classification.jurisdiction === 'IN'
+                ? 'Statutory compliance evaluated under Indian law (The Drugs Rules, 1945 / CDSCO).'
+                : `Target jurisdiction: ${classification.jurisdiction}. Cross-jurisdiction statutory boundaries strictly enforced.`}
             </p>
           </div>
 
@@ -158,7 +169,7 @@ export const ResultOverview: React.FC<ResultOverviewProps> = ({ data }) => {
             ) : hasVerifiedCitations ? (
               <>
                 <ShieldCheck className="w-3.5 h-3.5 text-[#2dd4bf]" />
-                <span className="text-[#2dd4bf]">Statutory Gazette Verified</span>
+                <span className="text-[#2dd4bf]">Statutory Rules Verified</span>
               </>
             ) : hasEvidence ? (
               <>

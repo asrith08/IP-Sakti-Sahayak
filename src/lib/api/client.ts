@@ -125,6 +125,20 @@ export function saveChecklistItemStatus(requestId: string, checklistId: string, 
   }
 }
 
+export async function fetchAnalysisResult(requestId: string): Promise<AnalyzeResponse | null> {
+  if (!requestId) return null;
+  try {
+    const data = await apiRequest<AnalyzeResponse>('GET', `/api/v1/analyze/${requestId}`);
+    if (data) {
+      saveResultToStorage(data);
+      return applySavedChecklistOverrides(data);
+    }
+  } catch (err) {
+    console.warn(`[IP-SAKTI] Could not fetch remote analysis for ${requestId}:`, err);
+  }
+  return null;
+}
+
 export const STATE_MACHINE_SEQUENCE: {
   state: AnalysisMachineState;
   displayStage: 'ask' | 'classify' | 'evidence' | 'analyze' | 'verify' | 'decide';
@@ -135,37 +149,37 @@ export const STATE_MACHINE_SEQUENCE: {
     state: 'queued',
     displayStage: 'ask',
     message: 'Validating payload and routing request into secure processing queue...',
-    durationMs: 700
+    durationMs: 400
   },
   {
     state: 'classifying',
     displayStage: 'classify',
     message: 'Classifying domain, statutory jurisdiction, and regulatory taxonomies...',
-    durationMs: 900
+    durationMs: 500
   },
   {
     state: 'retrieving',
     displayStage: 'evidence',
-    message: 'Querying official pharmacopoeial compendia, TKDL classifications, and statutory gazettes...',
-    durationMs: 1200
+    message: 'Querying official statutory corpus (The Drugs Rules, 1945)...',
+    durationMs: 700
   },
   {
     state: 'analyzing',
     displayStage: 'analyze',
-    message: 'Synthesizing evidence claims against statutory patentability & licensing bars...',
-    durationMs: 1100
+    message: 'Synthesizing evidence claims against statutory regulatory provisions...',
+    durationMs: 700
   },
   {
     state: 'verifying',
     displayStage: 'verify',
-    message: 'Performing cryptographic citation cross-validation and authority checksum verification...',
-    durationMs: 800
+    message: 'Verifying citation integrity, chunk provenance, and claim grounding...',
+    durationMs: 600
   },
   {
     state: 'generating_checklist',
     displayStage: 'decide',
-    message: 'Compiling actionable compliance checklist, deadline schedules, and next procedural steps...',
-    durationMs: 600
+    message: 'Compiling actionable compliance checklist and next procedural steps...',
+    durationMs: 500
   }
 ];
 
@@ -173,7 +187,31 @@ export async function submitAnalysisRequest(
   request: AnalyzeRequest,
   onStateChange?: (state: AnalysisMachineState, stage: 'ask' | 'classify' | 'evidence' | 'analyze' | 'verify' | 'decide', detail: string) => void
 ): Promise<AnalyzeResponse> {
+  // Step 1: Immediate auth validation to avoid fake progression if unauthenticated
+  const token = await getAccessToken();
+  if (!token) {
+    const authErr = new Error('AUTH_FAILED: Authentication required. Please log in to run statutory analysis.');
+    (authErr as any).code = 'AUTH_FAILED';
+    throw authErr;
+  }
+
+  // Step 2: Validate request input
+  if (!request.question || !request.question.trim()) {
+    const valErr = new Error('VALIDATION_FAILED: Query question cannot be empty.');
+    (valErr as any).code = 'VALIDATION_FAILED';
+    throw valErr;
+  }
+
+  // Step 3: Launch real API call concurrently with progress indication
+  let isApiFinished = false;
+  const apiPromise = apiRequest<AnalyzeResponse>('POST', '/api/v1/analyze', request)
+    .finally(() => {
+      isApiFinished = true;
+    });
+
+  // Step 4: Progressively advance telemetry indicators while real API processes
   for (const step of STATE_MACHINE_SEQUENCE) {
+    if (isApiFinished) break;
     if (onStateChange) {
       onStateChange(step.state, step.displayStage, step.message);
     }
@@ -181,19 +219,32 @@ export async function submitAnalysisRequest(
   }
 
   try {
-    const data = await apiRequest<AnalyzeResponse>('POST', '/api/v1/analyze', request);
+    const data = await apiPromise;
     saveResultToStorage(data);
     if (onStateChange) {
       onStateChange('completed', 'decide', 'Analysis completed successfully.');
     }
     return data;
   } catch (error: any) {
-    console.error('[IP-SAKTI] Real analysis API failed:', error);
+    console.error('[IP-SAKTI] Analysis API execution failed:', error);
 
-    // If mock fallback is explicitly allowed for offline demos, provide marked demo data
+    const errorMsg = String(error?.message || error);
+    let classifiedCode = 'API_CONNECTION_FAILED';
+    if (errorMsg.includes('401') || errorMsg.includes('AUTH_FAILED') || errorMsg.includes('missing access token')) {
+      classifiedCode = 'AUTH_FAILED';
+    } else if (errorMsg.includes('400') || errorMsg.includes('Invalid analysis request')) {
+      classifiedCode = 'VALIDATION_FAILED';
+    } else if (errorMsg.includes('500') || errorMsg.includes('Internal Server Error')) {
+      classifiedCode = 'SERVER_ERROR';
+    }
+
+    const friendlyError = new Error(`${classifiedCode}: ${error?.message || 'Failed to complete analysis pipeline'}`);
+    (friendlyError as any).code = classifiedCode;
+
+    // Check if offline mock is explicitly allowed
     const allowMock = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
     if (!allowMock) {
-      throw new Error(error?.message || 'Regulatory analysis backend error');
+      throw friendlyError;
     }
 
     console.warn('[IP-SAKTI] Using offline development mock fallback (unverified demo mode)');

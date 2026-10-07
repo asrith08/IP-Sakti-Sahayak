@@ -91,13 +91,14 @@ export const AnalysisStateMachine: React.FC = () => {
   const [isPaused, setIsPaused] = useState(false);
 
   const hasStartedRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const runPipeline = async () => {
     setErrorMessage(null);
     setMachineState('queued');
     setTelemetryLogs([
       `[INIT] Validating request parameters for ${jurisdictionParam} / ${guidanceParam}...`,
-      `[AUTH] Initializing cryptographic citation verifier...`
+      `[AUTH] Initializing statutory evidence retrieval pipeline...`
     ]);
 
     const requestPayload: AnalyzeRequest = {
@@ -119,6 +120,7 @@ export const AnalysisStateMachine: React.FC = () => {
       const response = await submitAnalysisRequest(
         requestPayload,
         (state, stage, detail) => {
+          if (!isMountedRef.current) return;
           setMachineState(state);
           setCurrentMessage(detail);
           setTelemetryLogs(prev => [
@@ -128,20 +130,26 @@ export const AnalysisStateMachine: React.FC = () => {
         }
       );
 
+      if (!isMountedRef.current) return;
       setResult(response);
       setMachineState('completed');
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('[IP-SAKTI] Pipeline execution failed:', err);
+      if (!isMountedRef.current) return;
       setMachineState('failed');
-      setErrorMessage('Failed to complete statutory analysis pipeline. Please retry.');
+      setErrorMessage(err?.message || 'Failed to complete statutory analysis pipeline. Please retry.');
     }
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
     if (!hasStartedRef.current) {
       hasStartedRef.current = true;
       runPipeline();
     }
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   // Automatic transition countdown upon completion

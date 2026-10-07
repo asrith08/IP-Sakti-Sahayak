@@ -16,7 +16,7 @@ export const CitationsList: React.FC<CitationsListProps> = ({ citations }) => {
         </div>
         <div className="flex items-center space-x-1.5 text-xs font-mono text-[#2dd4bf]">
           <ShieldCheck className="w-4 h-4" />
-          <span>Primary Source Certified</span>
+          <span>Indexed Statutory Records</span>
         </div>
       </div>
 

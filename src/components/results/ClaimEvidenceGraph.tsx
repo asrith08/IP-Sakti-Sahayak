@@ -27,7 +27,12 @@ export const ClaimEvidenceGraph: React.FC<ClaimEvidenceGraphProps> = ({
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
 
   const evidenceMap = new Map<string, EvidenceItem>(evidence.map(e => [e.id, e]));
-  const citationMap = new Map<string, CitationItem>(citations.map(c => [c.id, c]));
+  const citationMap = new Map<string, CitationItem>();
+  for (const c of citations) {
+    citationMap.set(c.id, c);
+    if (c.chunkId) citationMap.set(c.chunkId, c);
+    if (c.chunk_id) citationMap.set(c.chunk_id, c);
+  }
 
   const categories = ['ALL', ...Array.from(new Set(claims.map(c => c.category)))];
 

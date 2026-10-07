@@ -12,6 +12,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:3002',
   'https://ip-sakti-sahayak-puce.vercel.app',
   ...(process.env.APP_URL ? [process.env.APP_URL] : []),
 ];

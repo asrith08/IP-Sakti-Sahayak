@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter, Link } from '../lib/router';
-import { getAnalysisResult } from '../lib/api/client';
+import { getAnalysisResult, fetchAnalysisResult } from '../lib/api/client';
 import { AnalyzeResponse } from '../types/api';
 import { generateDossierPdf } from '../lib/pdf/generateDossierPdf';
 import { ResultOverview } from '../components/results/ResultOverview';
@@ -31,9 +31,19 @@ export const ResultsView: React.FC = () => {
 
   useEffect(() => {
     setLoading(true);
-    const result = getAnalysisResult(requestId);
-    setData(result);
-    setLoading(false);
+    const localResult = getAnalysisResult(requestId);
+    if (localResult) {
+      setData(localResult);
+      setLoading(false);
+    } else {
+      fetchAnalysisResult(requestId)
+        .then((remote) => {
+          setData(remote);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }
   }, [requestId]);
 
   const handleShare = () => {

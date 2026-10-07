@@ -53,6 +53,10 @@ export interface QuestionClassification {
   requiresHumanReview: boolean;
   confidence: number; // 0 – 1
   normalizedQuery: string; // cleaned, lower‑case query
+  hasMultipleDomains?: boolean;
+  supportedDomains?: string[];
+  unsupportedDomains?: string[];
+  isSpecificNotificationRequest?: boolean;
 }
 
 /**
@@ -83,14 +87,14 @@ export function classifyQuestion(
 
   /* ---------- 2. Domain ---------- */
   let domain: Domain = 'Unknown';
-  const patentRegex = /\b(?:patent|patentability|patentable|patented|patents?|prior art|intellectual property|ip)\b/;
+  const patentRegex = /\b(?:patent|patentability|patentable|patented|patents?|patenting|prior art|intellectual property|ip)\b/;
   if (patentRegex.test(lower)) {
     domain = 'Patent';
   } else if (/trademark|brand name|logo|trademark registration/.test(lower)) {
     domain = 'Trademark';
   } else if (/copyright/.test(lower)) {
     domain = 'Copyright';
-  } else if (/regulatory|compliance|law|legislation|approval|approval process/.test(lower)) {
+  } else if (/regulatory|compliance|law|legislation|approval|approval process|licence|license|manufacturing|manufacture|selling|sell/.test(lower)) {
     domain = 'Regulatory';
   } else if (/safety|risk|hazard|danger|toxicity/.test(lower)) {
     domain = 'Safety';
@@ -107,13 +111,13 @@ export function classifyQuestion(
   switch (domain) {
     case 'Patent':
       if (
-        /patentability|patentable|can i patent|patent my|is this patentable|is this patentable|is my invention novel|is this already patented|does prior art exist|can i use this invention without infringing|freedom to operate|fto|patent infringement|without infringing/.test(
+        /patentability|patentable|patenting|can i patent|patent my|is this patentable|is my invention novel|is this already patented|does prior art exist|can i use this invention without infringing|freedom to operate|fto|patent infringement|without infringing|patent law|patent requirement|patents act/.test(
           lower,
         )
       ) {
         if (/already patented|prior art/.test(lower)) {
           intent = 'PriorArt';
-        } else if (/patentability|can i patent|is this patentable|is this patentable|is my invention novel/.test(lower)) {
+        } else if (/patentability|can i patent|is this patentable|is my invention novel|patenting|patent law|patent requirement|patents act/.test(lower)) {
           intent = 'Patentability';
         } else if (/freedom to operate|fto|use this invention without infringing|without infringing/.test(lower)) {
           intent = 'FreedomToOperate';
@@ -125,7 +129,7 @@ export function classifyQuestion(
       }
       break;
     case 'Trademark':
-      if (/trademark|brand name|logo/.test(lower)) {
+      if (/trademark|brand name|logo|register a trademark|trademark registration/.test(lower)) {
         intent = 'Trademark';
       } else {
         intent = 'GeneralResearch';
@@ -135,7 +139,7 @@ export function classifyQuestion(
       intent = 'Copyright';
       break;
     case 'Regulatory':
-      if (/compliance|approval|law|regulatory requirements|regulations|sell|selling|market|marketing|allowed|permitted|drugs?|cdsco|ayush|manufacturing requirements|labeling requirements/.test(lower)) {
+      if (/compliance|approval|law|regulatory requirements|regulations|sell|selling|market|marketing|allowed|permitted|drugs?|cdsco|ayush|manufacturing requirements|labeling requirements|licence|license/.test(lower)) {
         intent = 'RegulatoryCompliance';
       } else {
         intent = 'GeneralResearch';
@@ -171,9 +175,10 @@ export function classifyQuestion(
     productCategory = 'Pharmaceutical';
   }
 
-  /* ---------- 5. Risk Level ---------- */
+  /* ---------- 5. Risk Level & Safety Flags ---------- */
   let riskLevel: RiskLevel = 'Unknown';
-  if (/high risk|danger|dangerous|toxicity|adverse/.test(lower)) {
+  const isHighRiskImmediate = /without (?:any )?(?:regulatory|approval|licence|license|review)|launch tomorrow|sell immediately|bypass|unapproved|without prior|immediately without/.test(lower);
+  if (isHighRiskImmediate || /high risk|danger|dangerous|toxicity|adverse/.test(lower)) {
     riskLevel = 'High';
   } else if (/risk|side effect|hazard/.test(lower)) {
     riskLevel = 'Medium';
@@ -181,14 +186,51 @@ export function classifyQuestion(
     riskLevel = 'Low';
   }
 
-  /* ---------- 6. Requires Human Review ---------- */
+  /* ---------- 6. Specific Gazette Request Check ---------- */
+  const isSpecificNotificationRequest = /\b(?:gazette notification number|gazette number|notification number|exact notification)\b/.test(lower);
+
+  /* ---------- 7. Multi-Domain Scope Check ---------- */
+  const requestedDomains: string[] = [];
+  if (/\b(?:manufactur|licen|production)\b/.test(lower)) requestedDomains.push('manufacturing');
+  if (/\b(?:label|labelling|packaging)\b/.test(lower)) requestedDomains.push('labelling');
+  if (/\b(?:advertis|promotion)\b/.test(lower)) requestedDomains.push('advertising');
+  if (/\b(?:clinical|trial|human study)\b/.test(lower)) requestedDomains.push('clinical_evidence');
+  if (/\b(?:gst|tax|goods and services tax)\b/.test(lower)) requestedDomains.push('gst');
+  if (/\b(?:trademark|brand name)\b/.test(lower)) requestedDomains.push('trademark');
+  if (/\b(?:patent|patent protection|patentability)\b/.test(lower)) requestedDomains.push('patent');
+  if (/\b(?:state licensing|state specific|sla)\b/.test(lower)) requestedDomains.push('state_licensing');
+
+  const hasMultipleDomains = requestedDomains.length >= 3;
+  const supportedDomains: string[] = [];
+  const unsupportedDomains: string[] = [];
+
+  for (const d of requestedDomains) {
+    if (d === 'manufacturing' || d === 'labelling') {
+      supportedDomains.push(d === 'manufacturing' ? 'Manufacturing & Standards (The Drugs Rules, 1945)' : 'Labelling Provisions (The Drugs Rules, 1945)');
+    } else if (d === 'patent') {
+      unsupportedDomains.push('Patent Law & Protection (The Patents Act, 1970 — Not in current repository)');
+    } else if (d === 'trademark') {
+      unsupportedDomains.push('Trademark Registration (The Trade Marks Act, 1999 — Not in current repository)');
+    } else if (d === 'gst') {
+      unsupportedDomains.push('GST Tax Compliance (Central / State GST Acts — Not in current repository)');
+    } else if (d === 'advertising') {
+      unsupportedDomains.push('Advertising Restrictions (Drugs and Magic Remedies Act — Not in current repository)');
+    } else if (d === 'clinical_evidence') {
+      unsupportedDomains.push('Clinical Trials & Evidence (New Drugs and Clinical Trials Rules — Not in current repository)');
+    } else if (d === 'state_licensing') {
+      unsupportedDomains.push('State-Specific SLA Rules (State Licensing Authorities — Not in current repository)');
+    }
+  }
+
+  /* ---------- 8. Requires Human Review ---------- */
   const requiresHumanReview =
     riskLevel === 'High' ||
+    isHighRiskImmediate ||
     jurisdiction === 'Unknown' ||
     domain === 'Unknown' ||
     intent === 'Unknown';
 
-  /* ---------- 7. Confidence Calculation ---------- */
+  /* ---------- 9. Confidence Calculation ---------- */
   const fieldConfidences: number[] = [];
   const addConf = (matched: boolean) => fieldConfidences.push(matched ? 0.9 : 0.3);
   addConf(jurisdiction !== 'Unknown');
@@ -202,7 +244,7 @@ export function classifyQuestion(
       Math.max(0, fieldConfidences.reduce((a, b) => a + b, 0) / fieldConfidences.length),
     );
 
-  /* ---------- 8. Normalized Query ---------- */
+  /* ---------- 10. Normalized Query ---------- */
   let normalizedQuery = question.trim().toLowerCase();
   normalizedQuery = normalizedQuery.replace(
     /^(can i|can we|does this|is this|is it|can the|can you|will you|is there|what is|are you|could you|could i|could we|would you|would i|should i|should we|can the|is that)\s+/i,
@@ -220,5 +262,9 @@ export function classifyQuestion(
     requiresHumanReview,
     confidence,
     normalizedQuery,
+    hasMultipleDomains,
+    supportedDomains,
+    unsupportedDomains,
+    isSpecificNotificationRequest,
   };
 }

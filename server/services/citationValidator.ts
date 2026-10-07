@@ -25,7 +25,7 @@ export function validateCitations(
   evidenceMap: Map<string, RetrievalResult>
 ): CitationItem[] {
   const verifiedCitations: CitationItem[] = [];
-  const processedEvidenceIds = new Set<string>();
+  const processedChunkIds = new Set<string>();
 
   for (let i = 0; i < rawCitations.length; i++) {
     const raw = rawCitations[i];
@@ -36,30 +36,29 @@ export function validateCitations(
       continue;
     }
 
-    if (processedEvidenceIds.has(evidenceId)) {
-      // Avoid duplicate citations for the exact same evidence item
+    const actual = evidenceMap.get(evidenceId)!;
+
+    if (processedChunkIds.has(actual.chunkId)) {
+      // Avoid duplicate citations pointing to the exact same underlying statutory chunk
       continue;
     }
-    processedEvidenceIds.add(evidenceId);
-
-    const actual = evidenceMap.get(evidenceId)!;
+    processedChunkIds.add(actual.chunkId);
 
     // Use actual database values to prevent hallucinated titles/URLs
     const actualDocTitle = actual.documentTitle || 'The Drugs Rules, 1945';
     const actualAuthority = actual.organization || actual.sourceName || 'Central Drugs Standard Control Organisation';
     const actualJurisdiction = actual.jurisdiction || 'India';
-    const actualUrl = actual.sourceUrl || actual.canonicalUrl || 'https://www.cdsco.gov.in/';
+    const actualUrl = actual.sourceUrl || actual.canonicalUrl || 'https://www.cdsco.gov.in/opencms/opencms/en/Acts-and-rules/Drugs-Rules/';
 
     // Derive rule or gazette identifier from actual section_title or rule number if available
     let regNumber = 'The Drugs Rules, 1945';
     if (actual.sectionTitle && actual.sectionTitle.trim().length > 0) {
-      regNumber = actual.sectionTitle.trim();
+      regNumber = actual.sectionTitle.replace(/\s+/g, ' ').trim();
     } else if (actual.pageNumber !== null) {
       regNumber = `The Drugs Rules, 1945 (Page ${actual.pageNumber})`;
     }
 
     // Determine verification status based on authority tier
-    // Tier 1 (Statutory act / official CDSCO publication) -> statutory_act or verified_official
     let verificationStatus: CitationItem['verification_status'] = 'statutory_act';
     if (actual.authorityTier === 1) {
       verificationStatus = 'statutory_act';
@@ -70,7 +69,7 @@ export function validateCitations(
     }
 
     verifiedCitations.push({
-      id: `cite_${i + 1}`,
+      id: `cite_${verifiedCitations.length + 1}`,
       chunkId: actual.chunkId,
       documentId: actual.documentId,
       sourceId: actual.sourceId,
@@ -81,7 +80,7 @@ export function validateCitations(
       jurisdiction: actualJurisdiction,
       document_title: actualDocTitle,
       gazette_or_reg_number: regNumber,
-      version: actual.documentType || 'Principal Legislation (1945, as amended)',
+      version: actual.documentType || 'Statutory Rules (1945, as amended)',
       effective_date: actual.publicationDate || '1945-12-21',
       official_url: actualUrl,
       verification_status: verificationStatus,
@@ -91,13 +90,17 @@ export function validateCitations(
   // If the LLM returned zero citations but we have valid retrieved evidence,
   // construct truthful citations directly from the top evidence items
   if (verifiedCitations.length === 0 && evidenceMap.size > 0) {
-    let index = 1;
-    for (const [eid, actual] of evidenceMap.entries()) {
-      if (index > 3) break; // Limit auto-fallback citations to top 3
+    for (const [, actual] of evidenceMap.entries()) {
+      if (verifiedCitations.length >= 3) break; // Limit auto-fallback citations to top 3 distinct chunks
+      if (processedChunkIds.has(actual.chunkId)) continue;
+      processedChunkIds.add(actual.chunkId);
 
-      const regNumber = actual.sectionTitle?.trim() || `The Drugs Rules, 1945 (Page ${actual.pageNumber ?? 1})`;
+      const regNumber = actual.sectionTitle
+        ? actual.sectionTitle.replace(/\s+/g, ' ').trim()
+        : `The Drugs Rules, 1945 (Page ${actual.pageNumber ?? 1})`;
+
       verifiedCitations.push({
-        id: `cite_${index}`,
+        id: `cite_${verifiedCitations.length + 1}`,
         chunkId: actual.chunkId,
         documentId: actual.documentId,
         sourceId: actual.sourceId,
@@ -110,10 +113,9 @@ export function validateCitations(
         gazette_or_reg_number: regNumber,
         version: actual.documentType || 'Statutory Rules (1945, as amended)',
         effective_date: actual.publicationDate || '1945-12-21',
-        official_url: actual.sourceUrl || actual.canonicalUrl || 'https://www.cdsco.gov.in/',
+        official_url: actual.sourceUrl || actual.canonicalUrl || 'https://www.cdsco.gov.in/opencms/opencms/en/Acts-and-rules/Drugs-Rules/',
         verification_status: 'statutory_act',
       });
-      index++;
     }
   }
 

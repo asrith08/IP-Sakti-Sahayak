@@ -129,12 +129,50 @@ router.post(
           ? classification.jurisdiction
           : (request.jurisdiction.code === 'IN' ? 'India' : request.jurisdiction.code);
 
-      // ── Step 2: Hybrid Knowledge Retrieval ─────────────────────────────────
-      // Retrieve initial candidate pool
-      const candidates = await retrieveKnowledge(normalizedQuery, {
-        jurisdiction: retrievalJurisdiction,
-        limit: 25,
+      // Check for recent duplicate request by same user within 15 seconds (Strict Mode / double-click guard)
+      const supabase = getSupabaseAdmin();
+      const recentThreshold = new Date(Date.now() - 15000).toISOString();
+      const { data: recentRequests } = await supabase
+        .from('analysis_requests')
+        .select('id, created_at, request')
+        .eq('user_id', userId)
+        .gte('created_at', recentThreshold)
+        .order('created_at', { ascending: false })
+        .limit(3);
+
+      const matchingRequest = (recentRequests || []).find((r: any) => {
+        const reqObj = r.request as Partial<AnalyzeRequest>;
+        return reqObj?.question?.trim().toLowerCase() === request.question.trim().toLowerCase();
       });
+
+      if (matchingRequest) {
+        const { data: existingAnalysis } = await supabase
+          .from('analyses')
+          .select('result')
+          .eq('request_id', matchingRequest.id)
+          .single();
+
+        if (existingAnalysis?.result) {
+          console.log(`[IP-SAKTI] Idempotency guard: returning existing analysis for request ${matchingRequest.id}`);
+          return res.status(200).json(existingAnalysis.result);
+        }
+      }
+
+      // ── Step 2: Hybrid Knowledge Retrieval ─────────────────────────────────
+      // If the query is purely about Patent law or Trademark law, the knowledge base (which only contains
+      // The Drugs Rules, 1945) does not contain the statutory corpus for patents or trademarks.
+      // We must NOT misattribute drug rules excerpts as patent/trademark law.
+      const isPurePatent = (classification.domain === 'Patent' || classification.intent === 'Patentability' || classification.intent === 'PriorArt') && !classification.hasMultipleDomains;
+      const isPureTrademark = (classification.domain === 'Trademark' || classification.intent === 'Trademark') && !classification.hasMultipleDomains;
+      const isPureForeign = retrievalJurisdiction !== 'India' && (retrievalJurisdiction as string) !== 'IN';
+
+      let candidates: any[] = [];
+      if (!isPurePatent && !isPureTrademark && !isPureForeign) {
+        candidates = await retrieveKnowledge(normalizedQuery, {
+          jurisdiction: retrievalJurisdiction,
+          limit: 25,
+        });
+      }
 
       // ── Step 3: Multi-Factor Deterministic Reranking ────────────────────────
       const rerankedResults = rerankEvidence(candidates, normalizedQuery, {
@@ -152,6 +190,7 @@ router.post(
         request,
         promptText,
         availableEvidenceIds,
+        evidenceMap,
       );
 
       // ── Step 6: Grounding & Claim Validation ────────────────────────────────
@@ -194,15 +233,21 @@ router.post(
         ...(decisionEval.decisionState === 'INSUFFICIENT_EVIDENCE'
           ? [decisionEval.rationale]
           : []),
+        ...(classification.hasMultipleDomains && classification.unsupportedDomains && classification.unsupportedDomains.length > 0
+          ? [`Not established by current knowledge base: ${classification.unsupportedDomains.join('; ')}.`]
+          : []),
       ];
+
+      // Remove duplicate warnings
+      const uniqueWarnings = Array.from(new Set(combinedWarnings.map((w) => w.trim()))).filter(Boolean);
 
       const answer: AnswerSection = {
         summary: llmOutput.summary,
         details: llmOutput.details && llmOutput.details.length > 0
           ? llmOutput.details
           : evidenceItems.map((item) => `${item.document_name} — ${item.section_or_rule}: ${item.excerpt}`),
-        warnings: combinedWarnings,
-        statutoryBasis: llmOutput.statutoryBasis || ['The Drugs Rules, 1945'],
+        warnings: uniqueWarnings,
+        statutoryBasis: evidenceItems.length > 0 ? ['The Drugs Rules, 1945'] : [],
       };
 
       const classificationResult: ClassificationResult = {
@@ -220,8 +265,6 @@ router.post(
       };
 
       // ── Step 11: Database Persistence ──────────────────────────────────────
-      const supabase = getSupabaseAdmin();
-
       const { data: requestData, error: requestError } = await supabase
         .from('analysis_requests')
         .insert([
@@ -251,7 +294,7 @@ router.post(
         evidence: evidenceItems,
         citations: verifiedCitations,
         checklist,
-        warnings: combinedWarnings,
+        warnings: uniqueWarnings,
         next_steps,
         decision_state: decisionEval.decisionState,
         confidence_score: decisionEval.confidenceScore,
@@ -298,6 +341,51 @@ router.post(
     } catch (error) {
       console.error('Analysis route error:', error);
       return next(error);
+    }
+  },
+);
+
+// ── GET /api/v1/analyze/:id ──────────────────────────────────────────────────
+// Retrieve persisted analysis by dossier ID (request_id or analysis UUID)
+router.get(
+  '/:id',
+  authMiddleware,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const supabase = getSupabaseAdmin();
+      const authenticatedRequest = req as AuthenticatedRequest;
+      const userId = authenticatedRequest.supabaseUser?.id;
+
+      if (!id || typeof id !== 'string') {
+        return res.status(400).json({ error: 'Valid dossier ID is required' });
+      }
+
+      // First check analyses by request_id or id
+      let query = supabase
+        .from('analyses')
+        .select('id, request_id, user_id, status, result, created_at')
+        .or(`request_id.eq.${id},id.eq.${id}`);
+
+      if (userId) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query.maybeSingle();
+
+      if (error) {
+        console.error('[IP-SAKTI] Error fetching analysis by ID:', error.message);
+        return res.status(500).json({ error: 'Failed to query analysis record' });
+      }
+
+      if (!data || !data.result) {
+        return res.status(404).json({ error: 'Analysis record not located in database' });
+      }
+
+      return res.status(200).json(data.result);
+    } catch (err) {
+      console.error('[IP-SAKTI] GET analyze by ID error:', err);
+      return next(err);
     }
   },
 );
