@@ -9,7 +9,12 @@ import { supabaseBrowser } from '../supabase/browser';
 
 const STORAGE_PREFIX = 'ipsakti_analysis_';
 const CHECKLIST_STORAGE_PREFIX = 'ipsakti_chk_';
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+// In development, use the Vite dev-server proxy (same-origin '/api') so the
+// browser never makes a cross-origin request to the backend. In production,
+// VITE_API_BASE_URL must point to the deployed API; never falls back to localhost.
+const BASE_URL = import.meta.env.DEV
+  ? ''
+  : (import.meta.env.VITE_API_BASE_URL || '');
 
 async function getAccessToken(): Promise<string | null> {
   const { data, error } = await supabaseBrowser.auth.getSession();
@@ -232,6 +237,8 @@ export async function submitAnalysisRequest(
     let classifiedCode = 'API_CONNECTION_FAILED';
     if (errorMsg.includes('401') || errorMsg.includes('AUTH_FAILED') || errorMsg.includes('missing access token')) {
       classifiedCode = 'AUTH_FAILED';
+    } else if (errorMsg.includes('403')) {
+      classifiedCode = 'AUTHORIZATION_FAILED';
     } else if (errorMsg.includes('400') || errorMsg.includes('Invalid analysis request')) {
       classifiedCode = 'VALIDATION_FAILED';
     } else if (errorMsg.includes('500') || errorMsg.includes('Internal Server Error')) {
